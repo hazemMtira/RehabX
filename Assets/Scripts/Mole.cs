@@ -11,17 +11,28 @@ public abstract class Mole : MonoBehaviour
 
     public GameObject floatingTextPrefab;
 
-    public void Init(Hole owningHole, SpawnManager spawnManager, DifficultyData diff, GameObject prefab)
-    {
-        hole           = owningHole;
-        manager        = spawnManager;
-        difficulty     = diff;
-        originalPrefab = prefab;
-        isAlive        = true;
+   public void Init(Hole owningHole, SpawnManager spawnManager, DifficultyData diff, GameObject prefab)
+{
+    hole           = owningHole;
+    manager        = spawnManager;
+    difficulty     = diff;
+    originalPrefab = prefab;
+    isAlive        = true;
 
-        transform.position = hole.BottomPosition;
-        StartCoroutine(LifeCycle());
+    transform.position = hole.BottomPosition;
+
+    // Always face the player (camera)
+    Transform cam = Camera.main != null ? Camera.main.transform : null;
+    if (cam != null)
+    {
+        Vector3 direction = cam.position - transform.position;
+        direction.y = 0f; // keep upright — only rotate on Y axis
+        if (direction != Vector3.zero)
+            transform.rotation = Quaternion.LookRotation(direction);
     }
+
+    StartCoroutine(LifeCycle());
+}
 
     IEnumerator LifeCycle()
     {
