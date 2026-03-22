@@ -16,14 +16,15 @@ public class GameManager : MonoBehaviour
 
     public GameState CurrentState { get; private set; }
 
-    [Header("UI")]
+    [Header("UI — Gameplay")]
     public GameObject gameplayCanvas;
+
+    [Header("UI — End Game")]
     public GameObject endGameCanvas;
     public TextMeshProUGUI finalScoreText;
     public TextMeshProUGUI finalTimeText;
-
-    [Header("Scene Names")]
-    public string mainMenuSceneName = "MainMenu";
+    public TextMeshProUGUI gameOverText;       // "Round Complete!" or "Time's Up!"
+    public TextMeshProUGUI restartStatusText;  // "Restart requested — waiting for therapist..."
 
     void Awake()
     {
@@ -32,7 +33,6 @@ public class GameManager : MonoBehaviour
         else
             Destroy(gameObject);
 
-        // Start directly in Playing (no menu logic)
         CurrentState = GameState.Playing;
     }
 
@@ -50,7 +50,6 @@ public class GameManager : MonoBehaviour
         CurrentState = state;
     }
 
-    // NEW: finalTime is now int
     public void HandleRoundEnd(int finalScore, int finalTime, bool timeout)
     {
         if (gameplayCanvas != null)
@@ -59,23 +58,51 @@ public class GameManager : MonoBehaviour
         if (endGameCanvas != null)
             endGameCanvas.SetActive(true);
 
+        // Round result message
+        if (gameOverText != null)
+            gameOverText.text = timeout ? "Time's Up!" : "Round Complete!";
+
+        // Score
         if (finalScoreText != null)
-            finalScoreText.text = "Score: " + finalScore;
+            finalScoreText.text = "SCORE: " + finalScore;
 
+        // Time
         if (finalTimeText != null)
-            finalTimeText.text = "Time: " + finalTime + "s"; // <--- Display as integer seconds
+        {
+            int mins = finalTime / 60;
+            int secs = finalTime % 60;
+            finalTimeText.text = mins > 0
+                ? $"TIME: {mins}m {secs:00}s"
+                : $"TIME: {secs}s";
+        }
+
+        // Clear restart status
+        if (restartStatusText != null)
+            restartStatusText.text = "";
     }
 
-    public void RestartGame()
+    /// <summary>
+    /// Called by EndGameMenuController when patient requests a restart.
+    /// Notifies Supabase so the therapist sees it on the dashboard.
+    /// </summary>
+    public void RequestRestart()
     {
-        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
-    }
+        if (restartStatusText != null)
+            restartStatusText.text = "Restart requested — waiting for therapist...";
 
-    public void LoadMainMenu()
-    {
-        if (!string.IsNullOrEmpty(mainMenuSceneName))
-            SceneManager.LoadScene(mainMenuSceneName);
+        string sessionId = GameSessionSettings.Instance?.sessionId;
+        if (SupabaseManager.Instance != null && !string.IsNullOrEmpty(sessionId))
+            SupabaseManager.Instance.RequestRestart(sessionId);
         else
-            Debug.LogWarning("Main Menu scene name not set in GameManager.");
+            Debug.LogWarning("[GameManager] Cannot request restart — no session ID.");
+    }
+
+    public void QuitGame()
+    {
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
     }
 }

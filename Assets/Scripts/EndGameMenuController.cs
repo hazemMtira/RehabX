@@ -2,16 +2,19 @@ using UnityEngine;
 
 public class EndGameMenuController : MonoBehaviour
 {
-    public void RestartGame()
+    /// <summary>
+    /// Sends a restart request to Supabase so the therapist
+    /// sees a notification on the dashboard.
+    /// </summary>
+    public void RequestRestart()
     {
-        if (GameManager.Instance != null) GameManager.Instance.RestartGame();
+        if (GameManager.Instance != null)
+            GameManager.Instance.RequestRestart();
     }
 
-    public void LoadMainMenu()
-    {
-        if (GameManager.Instance != null) GameManager.Instance.LoadMainMenu();
-    }
-
+    /// <summary>
+    /// Closes the application.
+    /// </summary>
     public void QuitGame()
     {
 #if UNITY_EDITOR
