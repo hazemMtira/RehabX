@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 9e2d0dd34eba31e428ee50b194a0b90d
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 191779
+  packageName: The Realtime Rascals
+  packageVersion: 1.0.1
+  assetPath: Assets/Realtime Rascals/Animator/Apple_Blinking_Idle.controller
+  uploadId: 424853
