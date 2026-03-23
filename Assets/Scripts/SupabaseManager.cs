@@ -12,6 +12,7 @@ using UnityEngine.Networking;
 ///   3. RoundController calls SetSessionActive() when round starts
 ///   4. RoundController calls SubmitResults() when round ends
 ///   5. EndGameMenuController calls RequestRestart() when patient wants to replay
+///   6. LoadingSceneController calls ResetForNewSession() on each load
 /// </summary>
 public class SupabaseManager : MonoBehaviour
 {
@@ -54,6 +55,8 @@ public class SupabaseManager : MonoBehaviour
 
     void Start()
     {
+        // Only start polling from Start() on first launch.
+        // Subsequent loads go through ResetForNewSession() called by LoadingSceneController.
         StartPolling();
     }
 
@@ -76,6 +79,25 @@ public class SupabaseManager : MonoBehaviour
         Debug.Log("[Supabase] Polling stopped.");
     }
 
+    /// <summary>
+    /// Called by LoadingSceneController every time the loading scene loads.
+    /// Resets session state and starts polling for a fresh pending session.
+    /// </summary>
+    public void ResetForNewSession()
+    {
+        StopPolling();
+
+        // Clear old session data so the game doesn't reuse the previous session
+        if (GameSessionSettings.Instance != null)
+        {
+            GameSessionSettings.Instance.sessionId        = null;
+            GameSessionSettings.Instance.selectedDifficulty = null;
+        }
+
+        StartPolling();
+        Debug.Log("[Supabase] Reset complete — polling for new session.");
+    }
+
     IEnumerator PollForPendingSession()
     {
         while (_polling)
@@ -87,7 +109,7 @@ public class SupabaseManager : MonoBehaviour
 
     IEnumerator FetchPendingSession()
     {
-        string cutoff  = DateTime.UtcNow.AddSeconds(-30).ToString("o");
+        string cutoff   = DateTime.UtcNow.AddSeconds(-30).ToString("o");
         string endpoint = $"{URL}/sessions?session_status=eq.pending&order=created_at.desc&limit=1&select=*&created_at=gte.{cutoff}";
 
         using var req = UnityWebRequest.Get(endpoint);

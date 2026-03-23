@@ -7,18 +7,16 @@ using TMPro;
 /// Attach to a GameObject in your Loading Scene.
 /// Shows instructions while waiting for a Supabase session.
 /// Once session is received, shows a 5-second countdown then loads the game scene.
-/// 
+///
 /// SETUP:
-///   1. Create a new scene called "LoadingScene" and add it to Build Settings (index 0)
-///   2. Your Game scene should be in Build Settings too (index 1 or named)
-///   3. Create a World Space Canvas as child of Main Camera
-///   4. Assign the TMP text fields in the inspector
-///   5. Make sure SupabaseManager is in this scene (or carried over via DontDestroyOnLoad)
+///   1. Scene named "LoadingScene" at Build Settings index 0
+///   2. Assign TMP text fields in the inspector
+///   3. SupabaseManager and GameSessionSettings must exist in this scene
 /// </summary>
 public class LoadingSceneController : MonoBehaviour
 {
     [Header("Status Text")]
-    [Tooltip("Main status line — shows 'Waiting...' then 'Get Ready!'")]
+    [Tooltip("Main status line — shows 'Waiting...' then 'Session Ready!'")]
     public TextMeshProUGUI statusText;
 
     [Tooltip("Shows the countdown number 5..4..3..2..1")]
@@ -27,13 +25,9 @@ public class LoadingSceneController : MonoBehaviour
     [Tooltip("Subtitle under status — shows session info once received")]
     public TextMeshProUGUI subtitleText;
 
-    [Header("Instruction Panels")]
-    [Tooltip("Parent GameObject containing all instruction cards — always visible")]
-    public GameObject instructionsRoot;
-
     [Header("Scene Transition")]
     [Tooltip("Name of the game scene to load after countdown")]
-    public string gameSceneName = "GameScene";
+    public string gameSceneName = "FieldScene";
 
     [Tooltip("Countdown duration in seconds after session is received")]
     public float countdownDuration = 5f;
@@ -50,15 +44,17 @@ public class LoadingSceneController : MonoBehaviour
 
     void Start()
     {
-        DontDestroyOnLoad(gameObject);
-        // Initial UI state
-        SetStatus("Waiting for session...", "Put on your headset and ask your therapist to start the session.");
+        // Reset UI
+        SetStatus("Waiting for session...", "Ask your therapist to start the session.");
         if (countdownText != null) countdownText.gameObject.SetActive(false);
 
-        // Listen for session
         if (SupabaseManager.Instance != null)
         {
+            // Subscribe to session loaded event
             SupabaseManager.Instance.OnSessionLoaded += OnSessionLoaded;
+
+            // Always reset and restart polling — handles both first launch and restart flow
+            SupabaseManager.Instance.ResetForNewSession();
         }
         else
         {
@@ -83,12 +79,11 @@ public class LoadingSceneController : MonoBehaviour
         if (_sessionReceived) return;
         _sessionReceived = true;
 
-        var gs = GameSessionSettings.Instance;
+        var gs         = GameSessionSettings.Instance;
         string difficulty = gs.selectedDifficulty != null ? gs.selectedDifficulty.name : "—";
         string hand       = gs.selectedHand.ToString();
 
         SetStatus("Session Ready!", $"Difficulty: {difficulty}   |   Hand: {hand}");
-
         StartCoroutine(CountdownAndLoad());
     }
 
@@ -101,7 +96,6 @@ public class LoadingSceneController : MonoBehaviour
         if (countdownText != null) countdownText.gameObject.SetActive(true);
 
         float remaining = countdownDuration;
-
         while (remaining > 0f)
         {
             if (countdownText != null)
@@ -114,10 +108,10 @@ public class LoadingSceneController : MonoBehaviour
         if (countdownText != null) countdownText.text = "GO!";
         yield return new WaitForSeconds(0.5f);
 
-        // Load game scene
-        string sceneName = string.IsNullOrEmpty(GameSessionSettings.Instance?.selectedStageName)
-            ? gameSceneName
-            : GameSessionSettings.Instance.selectedStageName;
+        // Load correct scene — use stage name from session if available
+        string sceneName = !string.IsNullOrEmpty(GameSessionSettings.Instance?.selectedStageName)
+            ? GameSessionSettings.Instance.selectedStageName
+            : gameSceneName;
 
         SceneManager.LoadScene(sceneName);
     }
@@ -128,7 +122,7 @@ public class LoadingSceneController : MonoBehaviour
 
     void SetStatus(string title, string subtitle)
     {
-        if (statusText  != null) statusText.text  = title;
-        if (subtitleText != null) subtitleText.text = subtitle;
+        if (statusText   != null) statusText.text   = title;
+        if (subtitleText != null) subtitleText.text  = subtitle;
     }
 }

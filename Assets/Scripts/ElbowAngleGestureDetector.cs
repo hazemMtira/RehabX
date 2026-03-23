@@ -1,5 +1,7 @@
 using UnityEngine;
 using TMPro;
+using UnityEngine.XR;
+using System.Collections.Generic;
 
 public class ElbowAngleGestureDetector : MonoBehaviour
 {
@@ -15,18 +17,16 @@ public class ElbowAngleGestureDetector : MonoBehaviour
     public Transform hand;
 
     [Header("Cocking Phase")]
-    [Tooltip("Elbow angle (deg) below which the arm is considered bent/cocked.")]
-    public float flexionThreshold = 150f;
-
-    [Tooltip("Minimum upward wrist speed (m/s) while bent to confirm the arm is being raised.")]
-    public float minCockUpwardSpeed = 0.10f;
+    [Tooltip("Elbow angle (deg) below which the arm is considered bent/cocked. " +
+             "Your resting angle is ~160° so this must be below that to require actual bending.")]
+    public float flexionThreshold = 145f;
 
     [Header("Strike Phase")]
     [Tooltip("Minimum downward wrist speed (m/s) to register as a valid strike.")]
-    public float minStrikeDownwardSpeed = 0.6f;
+    public float minStrikeDownwardSpeed = 0.4f;
 
     [Tooltip("How long (seconds) gestureReady stays true after a strike — gives hand time to reach the mole.")]
-    public float gestureReadyDuration = 0.2f;
+    public float gestureReadyDuration = 1f;
 
     [Header("Debug Overlay")]
     public bool showDebugOverlay = true;
@@ -56,7 +56,7 @@ public class ElbowAngleGestureDetector : MonoBehaviour
     bool  _initialized;
 
     bool  _armCocked;
-    float _lastStrikeTime = -999f;  // tracks when last strike fired
+    float _lastStrikeTime = -999f;
 
     // ---------------------------------------------------------------
     // Calibration (kept for future use)
@@ -91,6 +91,14 @@ public class ElbowAngleGestureDetector : MonoBehaviour
 
     void Update()
     {
+        // Freeze detection when hand tracking is unreliable
+        // (e.g. hand goes behind the headset lenses)
+        if (!IsHandTrackingConfident())
+        {
+            _lastWristPos = hand.position; // prevent velocity spike on re-acquisition
+            return;
+        }
+
         ComputeSegmentLengths();
 
         float angle = CalculateElbowAngle();
@@ -108,11 +116,12 @@ public class ElbowAngleGestureDetector : MonoBehaviour
         _angularVelocity  = Mathf.Lerp(_angularVelocity, rawVelocity, 0.8f);
 
         // Wrist vertical speed — positive up, negative down
+        // Using 0.9f lerp so speed peaks come through faster
         float rawVertical   = (hand.position.y - _lastWristPos.y) / Time.deltaTime;
-        _wristVerticalSpeed = Mathf.Lerp(_wristVerticalSpeed, rawVertical, 0.8f);
+        _wristVerticalSpeed = Mathf.Lerp(_wristVerticalSpeed, rawVertical, 0.9f);
 
-        // Deadzone — kill jitter
-        if (Mathf.Abs(_wristVerticalSpeed) < 0.15f)
+        // Deadzone — kill jitter but keep real movement
+        if (Mathf.Abs(_wristVerticalSpeed) < 0.08f)
             _wristVerticalSpeed = 0f;
 
         if (calibrationMode)
@@ -129,6 +138,28 @@ public class ElbowAngleGestureDetector : MonoBehaviour
         if (showDebugLogs)
             Debug.Log($"[GestureDetector] angle={angle:F1}° vel={_angularVelocity:F1}°/s " +
                       $"wristV={_wristVerticalSpeed:F2}m/s cocked={_armCocked} ready={gestureReady}");
+    }
+
+    // ---------------------------------------------------------------
+    // Tracking confidence check
+    // ---------------------------------------------------------------
+
+    bool IsHandTrackingConfident()
+    {
+        var devices = new List<InputDevice>();
+        InputDevices.GetDevicesWithCharacteristics(
+            InputDeviceCharacteristics.HandTracking, devices);
+
+        // If no hand tracking devices found at all, assume confident
+        // (e.g. in editor without headset)
+        if (devices.Count == 0) return true;
+
+        foreach (var device in devices)
+        {
+            if (device.TryGetFeatureValue(CommonUsages.isTracked, out bool tracked))
+                if (!tracked) return false;
+        }
+        return true;
     }
 
     // ---------------------------------------------------------------
@@ -173,7 +204,6 @@ public class ElbowAngleGestureDetector : MonoBehaviour
     void UpdateStrikeStateMachine(float angle)
     {
         // Keep gestureReady alive for gestureReadyDuration seconds
-        // so Mole.cs has enough time to catch it even if moles are low
         if (gestureReady)
         {
             if (Time.time - _lastStrikeTime > gestureReadyDuration)
@@ -182,10 +212,12 @@ public class ElbowAngleGestureDetector : MonoBehaviour
         }
 
         // --- Phase 1: Cock ---
+        // Arm must be meaningfully bent (below flexionThreshold)
+        // Since resting is ~160°, threshold of 145° means player
+        // must actually raise and bend their arm
         if (!_armCocked)
         {
-            bool elbowBent = angle < flexionThreshold;
-            if (elbowBent)
+            if (angle < flexionThreshold)
             {
                 _armCocked = true;
                 if (showDebugLogs)
@@ -200,7 +232,7 @@ public class ElbowAngleGestureDetector : MonoBehaviour
         {
             gestureReady    = true;
             _armCocked      = false;
-            _lastStrikeTime = Time.time;  // record when strike fired
+            _lastStrikeTime = Time.time;
 
             if (showDebugLogs)
                 Debug.Log($"[GestureDetector] ✅ STRIKE  downSpeed={-_wristVerticalSpeed:F2}m/s");
@@ -257,12 +289,15 @@ public class ElbowAngleGestureDetector : MonoBehaviour
             ? Mathf.Max(0f, gestureReadyDuration - (Time.time - _lastStrikeTime))
             : 0f;
 
+        bool confident = IsHandTrackingConfident();
+
         debugText.text =
             $"<color=#FFDD44>Elbow  </color> {angle:F1}°\n" +
             $"<color=#FFDD44>WristV </color> {dirLabel} {Mathf.Abs(_wristVerticalSpeed):F2}m/s\n" +
             $"<color=#FFDD44>Cocked </color> <color={cockedColor}>{_armCocked}</color>\n" +
             $"<color=#FFDD44>READY  </color> <color={readyColor}>{gestureReady}</color>" +
             (gestureReady ? $" <size=70%>{timeLeft:F2}s</size>" : "") + "\n" +
+            $"<color=#FFDD44>Track  </color> <color={(confident ? "#00FF88" : "#FF4444")}>{(confident ? "OK" : "LOST")}</color>\n" +
             $"<size=60%>" +
             $"flex<{flexionThreshold:F0}°  " +
             $"strike↓>{minStrikeDownwardSpeed:F1}m/s  " +
