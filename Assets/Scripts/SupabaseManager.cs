@@ -5,46 +5,21 @@ using UnityEngine.Networking;
 
 /// <summary>
 /// Handles all communication with Supabase REST API.
-/// Attach to a persistent GameObject in your Loading Scene.
-/// Flow:
-///   1. On Start → polls for a 'pending' session every 2 seconds
-///   2. When found → loads settings into GameSessionSettings → fires OnSessionLoaded
-///   3. RoundController calls SetSessionActive() when round starts
-///   4. RoundController calls SubmitResults() when round ends
-///   5. EndGameMenuController calls RequestRestart() when patient wants to replay
-///   6. LoadingSceneController calls ResetForNewSession() on each load
+/// Only picks up sessions assigned to THIS headset via headset_id matching.
 /// </summary>
 public class SupabaseManager : MonoBehaviour
 {
     public static SupabaseManager Instance { get; private set; }
 
-    // ---------------------------------------------------------------
-    // Config
-    // ---------------------------------------------------------------
-
     const string URL = "https://ojselmwfjaahqnzrapzf.supabase.co/rest/v1";
     const string KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qc2VsbXdmamFhaHFuenJhcHpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyMjg0MzUsImV4cCI6MjA4ODgwNDQzNX0.bVm9zGN0PDHRGl_zHg746Z2bL6FfHVHsYAdj2JJPgAU";
 
     [Header("Settings")]
-    [Tooltip("How often (seconds) to poll for a pending session while waiting.")]
     public float pollInterval = 2f;
 
-    // ---------------------------------------------------------------
-    // Events
-    // ---------------------------------------------------------------
-
-    /// <summary>Fired when a pending session is found and loaded into GameSessionSettings.</summary>
     public event Action OnSessionLoaded;
 
-    // ---------------------------------------------------------------
-    // State
-    // ---------------------------------------------------------------
-
     bool _polling = false;
-
-    // ---------------------------------------------------------------
-    // Unity lifecycle
-    // ---------------------------------------------------------------
 
     void Awake()
     {
@@ -55,8 +30,6 @@ public class SupabaseManager : MonoBehaviour
 
     void Start()
     {
-        // Only start polling from Start() on first launch.
-        // Subsequent loads go through ResetForNewSession() called by LoadingSceneController.
         StartPolling();
     }
 
@@ -79,18 +52,13 @@ public class SupabaseManager : MonoBehaviour
         Debug.Log("[Supabase] Polling stopped.");
     }
 
-    /// <summary>
-    /// Called by LoadingSceneController every time the loading scene loads.
-    /// Resets session state and starts polling for a fresh pending session.
-    /// </summary>
     public void ResetForNewSession()
     {
         StopPolling();
 
-        // Clear old session data so the game doesn't reuse the previous session
         if (GameSessionSettings.Instance != null)
         {
-            GameSessionSettings.Instance.sessionId        = null;
+            GameSessionSettings.Instance.sessionId         = null;
             GameSessionSettings.Instance.selectedDifficulty = null;
         }
 
@@ -109,8 +77,24 @@ public class SupabaseManager : MonoBehaviour
 
     IEnumerator FetchPendingSession()
     {
-        string cutoff   = DateTime.UtcNow.AddSeconds(-30).ToString("o");
-        string endpoint = $"{URL}/sessions?session_status=eq.pending&order=created_at.desc&limit=1&select=*&created_at=gte.{cutoff}";
+        // Wait for HeadsetManager to be ready
+        if (HeadsetManager.Instance == null || !HeadsetManager.Instance.IsRegistered)
+        {
+            Debug.Log("[Supabase] Waiting for HeadsetManager to register...");
+            yield break;
+        }
+
+        string headsetId = HeadsetManager.Instance.HeadsetId;
+        string cutoff    = DateTime.UtcNow.AddSeconds(-30).ToString("o");
+
+        // Only fetch sessions assigned to this specific headset
+        string endpoint = $"{URL}/sessions" +
+            $"?session_status=eq.pending" +
+            $"&headset_id=eq.{headsetId}" +
+            $"&order=created_at.desc" +
+            $"&limit=1" +
+            $"&select=*" +
+            $"&created_at=gte.{cutoff}";
 
         using var req = UnityWebRequest.Get(endpoint);
         AddHeaders(req);
@@ -140,7 +124,7 @@ public class SupabaseManager : MonoBehaviour
     }
 
     // ---------------------------------------------------------------
-    // Load session settings into GameSessionSettings
+    // Load session into GameSessionSettings
     // ---------------------------------------------------------------
 
     void LoadSessionIntoSettings(SessionData s)
@@ -183,7 +167,7 @@ public class SupabaseManager : MonoBehaviour
     }
 
     // ---------------------------------------------------------------
-    // Set session active — called by RoundController on round start
+    // Session lifecycle
     // ---------------------------------------------------------------
 
     public void SetSessionActive(string sessionId, Action onDone = null)
@@ -193,10 +177,6 @@ public class SupabaseManager : MonoBehaviour
             onDone));
     }
 
-    // ---------------------------------------------------------------
-    // Submit results — called by RoundController on round end
-    // ---------------------------------------------------------------
-
     public void SubmitResults(string sessionId, int finalScore, float roundDuration, float maxStrikeSpeed, Action onDone = null)
     {
         StartCoroutine(DoSubmitResults(sessionId, finalScore, roundDuration, maxStrikeSpeed, onDone));
@@ -204,12 +184,10 @@ public class SupabaseManager : MonoBehaviour
 
     IEnumerator DoSubmitResults(string sessionId, int finalScore, float roundDuration, float maxStrikeSpeed, Action onDone)
     {
-        // Mark session finished
         string endTime      = DateTime.UtcNow.ToString("o");
         string sessionPatch = $"{{\"session_status\":\"finished\",\"end_time\":\"{endTime}\"}}";
         yield return StartCoroutine(PatchSession(sessionId, sessionPatch, null));
 
-        // Insert metrics
         string metricsBody = $"{{" +
             $"\"session_id\":\"{sessionId}\"," +
             $"\"final_score\":{finalScore}," +
@@ -226,21 +204,15 @@ public class SupabaseManager : MonoBehaviour
         if (req.result != UnityWebRequest.Result.Success)
             Debug.LogError($"[Supabase] Failed to insert metrics: {req.error}\n{req.downloadHandler.text}");
         else
-            Debug.Log($"[Supabase] ✅ Metrics submitted. Score={finalScore} Duration={roundDuration:F1}s MaxSpeed={maxStrikeSpeed:F2}m/s");
+            Debug.Log($"[Supabase] ✅ Metrics submitted.");
 
         onDone?.Invoke();
     }
 
-    // ---------------------------------------------------------------
-    // Request restart — called by GameManager when patient hits restart
-    // ---------------------------------------------------------------
-
     public void RequestRestart(string sessionId, Action onDone = null)
     {
         Debug.Log("[Supabase] Restart requested by patient.");
-        StartCoroutine(PatchSession(sessionId,
-            "{\"restart_requested\":true}",
-            onDone));
+        StartCoroutine(PatchSession(sessionId, "{\"restart_requested\":true}", onDone));
     }
 
     // ---------------------------------------------------------------
@@ -277,10 +249,7 @@ public class SupabaseManager : MonoBehaviour
     // ---------------------------------------------------------------
 
     [Serializable]
-    class SessionArrayWrapper
-    {
-        public SessionData[] items;
-    }
+    class SessionArrayWrapper { public SessionData[] items; }
 
     [Serializable]
     class SessionData
@@ -291,6 +260,7 @@ public class SupabaseManager : MonoBehaviour
         public string level_name;
         public string patient_name;
         public string therapist_name;
+        public string headset_id;
         public int    score_needed;
         public float  round_duration_setting;
         public float  custom_spawn_interval;
