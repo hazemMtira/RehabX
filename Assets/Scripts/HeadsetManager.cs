@@ -41,28 +41,53 @@ public class HeadsetManager : MonoBehaviour
         DontDestroyOnLoad(gameObject);
     }
 
-    void Start()
+   void Start()
+{
+    if (PlayerPrefs.HasKey(PREFS_ID_KEY))
     {
-        // Check if already registered
-        if (PlayerPrefs.HasKey(PREFS_ID_KEY))
+        HeadsetId    = PlayerPrefs.GetString(PREFS_ID_KEY);
+        HeadsetName  = PlayerPrefs.GetString(PREFS_NM_KEY, "Unknown Headset");
+        StartCoroutine(VerifyOrReRegister());
+    }
+    else
+    {
+        HeadsetId    = Guid.NewGuid().ToString();
+        HeadsetName  = DetectHeadsetModel();
+        IsRegistered = false;
+        StartCoroutine(RegisterHeadset());
+    }
+}
+
+IEnumerator VerifyOrReRegister()
+{
+    string endpoint = $"{URL}/headsets?id=eq.{HeadsetId}&select=id";
+    using var req = UnityWebRequest.Get(endpoint);
+    AddHeaders(req);
+    yield return req.SendWebRequest();
+
+    if (req.result == UnityWebRequest.Result.Success)
+    {
+        string json = req.downloadHandler.text;
+        // If empty array returned — headset was deleted, re-register
+        if (json == "[]" || json == "[ ]")
         {
-            HeadsetId   = PlayerPrefs.GetString(PREFS_ID_KEY);
-            HeadsetName = PlayerPrefs.GetString(PREFS_NM_KEY, "Unknown Headset");
-            IsRegistered = true;
-            Debug.Log($"[HeadsetManager] Loaded existing ID: {HeadsetId} ({HeadsetName})");
+            Debug.Log("[HeadsetManager] Headset deleted from Supabase — re-registering.");
+            IsRegistered = false;
+            yield return StartCoroutine(RegisterHeadset());
         }
         else
         {
-            // First launch — generate new ID
-            HeadsetId    = Guid.NewGuid().ToString();
-            HeadsetName  = DetectHeadsetModel();
-            IsRegistered = false;
-            Debug.Log($"[HeadsetManager] New headset detected. ID={HeadsetId} Model={HeadsetName}");
-
-            // Auto-register with Supabase
-            StartCoroutine(RegisterHeadset());
+            IsRegistered = true;
+            Debug.Log($"[HeadsetManager] Verified: {HeadsetId} ({HeadsetName})");
         }
     }
+    else
+    {
+        // Network error — assume registered to avoid blocking
+        IsRegistered = true;
+        Debug.LogWarning("[HeadsetManager] Could not verify registration — assuming OK.");
+    }
+}
 
     // ---------------------------------------------------------------
     // Headset model detection

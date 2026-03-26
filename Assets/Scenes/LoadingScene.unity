@@ -757,11 +757,11 @@ MonoBehaviour:
   titleFont: {fileID: 11400000, guid: 107ba33063b4f6d4aac9c1e42daae3f3, type: 2}
   bodyFont: {fileID: 11400000, guid: 8d58a77d18bf2fe458a5622889459268, type: 2}
   goodMole1: {fileID: 3984057257533306704, guid: 049e7213eb37a154da48cda132bf7af8, type: 3}
-  goodMole2: {fileID: 5522436752020179441, guid: ccdae903d0996134bb91d5e4fe008769, type: 3}
+  goodMole2: {fileID: 5522436752020179441, guid: a7ce20458bf71c6438a79b5c13e74a2c, type: 3}
   goodMole3: {fileID: 3374598784761602257, guid: 527c2dd07e9d1e24d8315416ff183725, type: 3}
   badMole: {fileID: 2077324985726816262, guid: e4965a783f6c2d741ac479e7ee5b211f, type: 3}
-  moleDisplayScale: 0.08
-  moleVerticalOffset: 0.04
+  moleDisplayScale: 60
+  moleVerticalOffset: -0.005
 --- !u!114 &1168502788
 MonoBehaviour:
   m_ObjectHideFlags: 0

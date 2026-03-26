@@ -25,8 +25,11 @@ public class ElbowAngleGestureDetector : MonoBehaviour
     [Tooltip("Minimum downward wrist speed (m/s) to register as a valid strike.")]
     public float minStrikeDownwardSpeed = 0.4f;
 
-    [Tooltip("How long (seconds) gestureReady stays true after a strike — gives hand time to reach the mole.")]
+    [Tooltip("How long (seconds) gestureReady stays true after a strike.")]
     public float gestureReadyDuration = 1f;
+
+    [Tooltip("Maximum physically possible wrist speed (m/s). Clamps tracking spikes.")]
+    public float maxPhysicalSpeed = 6f;
 
     [Header("Debug Overlay")]
     public bool showDebugOverlay = true;
@@ -35,7 +38,7 @@ public class ElbowAngleGestureDetector : MonoBehaviour
     public bool showDebugLogs = false;
 
     // ---------------------------------------------------------------
-    // Public state (read by Mole.cs)
+    // Public state (read by Mole.cs / RoundController)
     // ---------------------------------------------------------------
 
     public bool gestureReady { get; private set; }
@@ -50,6 +53,8 @@ public class ElbowAngleGestureDetector : MonoBehaviour
 
     Vector3 _lastWristPos;
     float   _wristVerticalSpeed;
+    float   _maxWristSpeed;       // peak raw speed — reset each round
+    bool    _wasTrackingLost;     // flag to skip one frame after tracking recovers
 
     float _lastAngle;
     float _angularVelocity;
@@ -66,6 +71,14 @@ public class ElbowAngleGestureDetector : MonoBehaviour
     float _calMinAngle =  999f;
     float _calMaxAngle =    0f;
     float _calMaxSpeed =    0f;
+
+    // ---------------------------------------------------------------
+    // Public API
+    // ---------------------------------------------------------------
+
+    public float GetWristSpeed()    => _wristVerticalSpeed;
+    public float GetMaxWristSpeed() => _maxWristSpeed;
+    public void  ResetMaxWristSpeed() { _maxWristSpeed = 0f; }
 
     // ---------------------------------------------------------------
     // Unity lifecycle
@@ -91,16 +104,24 @@ public class ElbowAngleGestureDetector : MonoBehaviour
 
     void Update()
     {
-        // Freeze detection when hand tracking is unreliable
-        // (e.g. hand goes behind the headset lenses)
+        // ── Tracking confidence check ──────────────────────────────
         if (!IsHandTrackingConfident())
         {
-            _lastWristPos = hand.position; // prevent velocity spike on re-acquisition
+            _lastWristPos    = hand.position; // prevent spike on recovery
+            _wasTrackingLost = true;
             return;
         }
 
-        ComputeSegmentLengths();
+        // Skip one frame after tracking recovers — position may have jumped
+        if (_wasTrackingLost)
+        {
+            _lastWristPos    = hand.position;
+            _wasTrackingLost = false;
+            return;
+        }
 
+        // ── Geometry ───────────────────────────────────────────────
+        ComputeSegmentLengths();
         float angle = CalculateElbowAngle();
 
         if (!_initialized)
@@ -111,19 +132,28 @@ public class ElbowAngleGestureDetector : MonoBehaviour
             return;
         }
 
-        // Angular velocity (smoothed)
+        // ── Angular velocity (smoothed) ────────────────────────────
         float rawVelocity = (angle - _lastAngle) / Time.deltaTime;
         _angularVelocity  = Mathf.Lerp(_angularVelocity, rawVelocity, 0.8f);
 
-        // Wrist vertical speed — positive up, negative down
-        // Using 0.9f lerp so speed peaks come through faster
-        float rawVertical   = (hand.position.y - _lastWristPos.y) / Time.deltaTime;
+        // ── Wrist vertical speed ───────────────────────────────────
+        float rawVertical = (hand.position.y - _lastWristPos.y) / Time.deltaTime;
+
+        // Clamp to physically possible range — kills any remaining tracking spikes
+        rawVertical = Mathf.Clamp(rawVertical, -maxPhysicalSpeed, maxPhysicalSpeed);
+
         _wristVerticalSpeed = Mathf.Lerp(_wristVerticalSpeed, rawVertical, 0.9f);
 
-        // Deadzone — kill jitter but keep real movement
+        // Deadzone — kill jitter
         if (Mathf.Abs(_wristVerticalSpeed) < 0.08f)
             _wristVerticalSpeed = 0f;
 
+        // Track peak raw speed — only valid clamped values recorded here
+        float absClamped = Mathf.Abs(rawVertical);
+        if (absClamped > _maxWristSpeed)
+            _maxWristSpeed = absClamped;
+
+        // ── State machine ──────────────────────────────────────────
         if (calibrationMode)
             RecordCalibration(angle);
         else
@@ -132,12 +162,14 @@ public class ElbowAngleGestureDetector : MonoBehaviour
         _lastAngle    = angle;
         _lastWristPos = hand.position;
 
+        // ── Debug ──────────────────────────────────────────────────
         if (showDebugOverlay)
             UpdateOverlay(angle);
 
         if (showDebugLogs)
             Debug.Log($"[GestureDetector] angle={angle:F1}° vel={_angularVelocity:F1}°/s " +
-                      $"wristV={_wristVerticalSpeed:F2}m/s cocked={_armCocked} ready={gestureReady}");
+                      $"wristV={_wristVerticalSpeed:F2}m/s maxV={_maxWristSpeed:F2}m/s " +
+                      $"cocked={_armCocked} ready={gestureReady}");
     }
 
     // ---------------------------------------------------------------
@@ -150,15 +182,13 @@ public class ElbowAngleGestureDetector : MonoBehaviour
         InputDevices.GetDevicesWithCharacteristics(
             InputDeviceCharacteristics.HandTracking, devices);
 
-        // If no hand tracking devices found at all, assume confident
-        // (e.g. in editor without headset)
+        // No hand tracking devices = editor mode, assume confident
         if (devices.Count == 0) return true;
 
         foreach (var device in devices)
-        {
-            if (device.TryGetFeatureValue(CommonUsages.isTracked, out bool tracked))
-                if (!tracked) return false;
-        }
+            if (device.TryGetFeatureValue(CommonUsages.isTracked, out bool tracked) && !tracked)
+                return false;
+
         return true;
     }
 
@@ -211,10 +241,7 @@ public class ElbowAngleGestureDetector : MonoBehaviour
             return;
         }
 
-        // --- Phase 1: Cock ---
-        // Arm must be meaningfully bent (below flexionThreshold)
-        // Since resting is ~160°, threshold of 145° means player
-        // must actually raise and bend their arm
+        // Phase 1: Cock — arm must bend below flexionThreshold
         if (!_armCocked)
         {
             if (angle < flexionThreshold)
@@ -226,9 +253,8 @@ public class ElbowAngleGestureDetector : MonoBehaviour
             return;
         }
 
-        // --- Phase 2: Strike ---
-        bool strikingDown = _wristVerticalSpeed < -minStrikeDownwardSpeed;
-        if (strikingDown)
+        // Phase 2: Strike — wrist moving down fast enough
+        if (_wristVerticalSpeed < -minStrikeDownwardSpeed)
         {
             gestureReady    = true;
             _armCocked      = false;
@@ -237,11 +263,6 @@ public class ElbowAngleGestureDetector : MonoBehaviour
             if (showDebugLogs)
                 Debug.Log($"[GestureDetector] ✅ STRIKE  downSpeed={-_wristVerticalSpeed:F2}m/s");
         }
-    }
-
-    public float GetWristSpeed()
-    {
-        return _wristVerticalSpeed;
     }
 
     public void ConsumeGesture()
@@ -284,16 +305,16 @@ public class ElbowAngleGestureDetector : MonoBehaviour
         string cockedColor = _armCocked   ? "#00FF88" : "#AAAAAA";
         string readyColor  = gestureReady ? "#FF4444" : "#FFFFFF";
         string dirLabel    = _wristVerticalSpeed > 0 ? "▲" : "▼";
+        bool   confident   = IsHandTrackingConfident();
 
         float timeLeft = gestureReady
             ? Mathf.Max(0f, gestureReadyDuration - (Time.time - _lastStrikeTime))
             : 0f;
 
-        bool confident = IsHandTrackingConfident();
-
         debugText.text =
             $"<color=#FFDD44>Elbow  </color> {angle:F1}°\n" +
             $"<color=#FFDD44>WristV </color> {dirLabel} {Mathf.Abs(_wristVerticalSpeed):F2}m/s\n" +
+            $"<color=#FFDD44>MaxV   </color> {_maxWristSpeed:F2}m/s\n" +
             $"<color=#FFDD44>Cocked </color> <color={cockedColor}>{_armCocked}</color>\n" +
             $"<color=#FFDD44>READY  </color> <color={readyColor}>{gestureReady}</color>" +
             (gestureReady ? $" <size=70%>{timeLeft:F2}s</size>" : "") + "\n" +
@@ -301,6 +322,7 @@ public class ElbowAngleGestureDetector : MonoBehaviour
             $"<size=60%>" +
             $"flex<{flexionThreshold:F0}°  " +
             $"strike↓>{minStrikeDownwardSpeed:F1}m/s  " +
-            $"window={gestureReadyDuration:F2}s</size>";
+            $"window={gestureReadyDuration:F2}s  " +
+            $"cap={maxPhysicalSpeed:F0}m/s</size>";
     }
 }
