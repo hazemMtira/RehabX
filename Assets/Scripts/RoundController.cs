@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class RoundController : MonoBehaviour
 {
@@ -21,8 +22,9 @@ public class RoundController : MonoBehaviour
     // ---------------------------------------------------------------
 
     DifficultyData _difficulty;
-    float          _roundStartTime;
     bool           _roundActive;
+    bool           _isPaused;
+    float          _elapsed;          // manually accumulated — immune to timeScale
     float          _maxStrikeSpeed;
 
     // ---------------------------------------------------------------
@@ -32,6 +34,16 @@ public class RoundController : MonoBehaviour
     void Start()
     {
         InitRound();
+    }
+
+    void OnDestroy()
+    {
+        // Always unsubscribe to avoid stale callbacks after scene unload
+        if (SupabaseManager.Instance != null)
+        {
+            SupabaseManager.Instance.OnPaused  -= HandlePause;
+            SupabaseManager.Instance.OnResumed -= HandleResume;
+        }
     }
 
     void InitRound()
@@ -59,9 +71,17 @@ public class RoundController : MonoBehaviour
 
     public void StartRound()
     {
-        _roundStartTime = Time.time;
         _roundActive    = true;
+        _isPaused       = false;
+        _elapsed        = 0f;
         _maxStrikeSpeed = 0f;
+
+        // Subscribe to pause / resume events from Supabase
+        if (SupabaseManager.Instance != null)
+        {
+            SupabaseManager.Instance.OnPaused  += HandlePause;
+            SupabaseManager.Instance.OnResumed += HandleResume;
+        }
 
         // Reset peak speed tracker on detector
         var detector = GetActiveDetector();
@@ -89,19 +109,51 @@ public class RoundController : MonoBehaviour
 
     void Update()
     {
-        if (!_roundActive) return;
+        if (!_roundActive || _isPaused) return;
+
+        // Use unscaled delta so this is resilient even if something else
+        // touches timeScale, but we also guard with _isPaused above.
+        _elapsed += Time.deltaTime;
 
         TrackMaxStrikeSpeed();
+        UpdateTimerUI(_elapsed);
 
-        float elapsed = Time.time - _roundStartTime;
-        UpdateTimerUI(elapsed);
-
-        if (elapsed >= _difficulty.gameDuration)
+        if (_elapsed >= _difficulty.gameDuration)
             EndRound(true);
     }
 
     // ---------------------------------------------------------------
-    // Max strike speed — only sample when a valid strike fires
+    // Pause / Resume
+    // ---------------------------------------------------------------
+
+    void HandlePause()
+    {
+        if (!_roundActive || _isPaused) return;
+
+        _isPaused       = true;
+        Time.timeScale  = 0f;
+
+        spawnManager.StopSpawning();
+        if (AudioManager.Instance != null) AudioManager.Instance.StopMusic();
+
+        Debug.Log("[RoundController] Round paused.");
+    }
+
+    void HandleResume()
+    {
+        if (!_roundActive || !_isPaused) return;
+
+        _isPaused       = false;
+        Time.timeScale  = 1f;
+
+        spawnManager.StartSpawning();
+        if (AudioManager.Instance != null) AudioManager.Instance.StartMusic();
+
+        Debug.Log("[RoundController] Round resumed.");
+    }
+
+    // ---------------------------------------------------------------
+    // Max strike speed
     // ---------------------------------------------------------------
 
     void TrackMaxStrikeSpeed()
@@ -109,14 +161,12 @@ public class RoundController : MonoBehaviour
         var detector = GetActiveDetector();
         if (detector == null) return;
 
-        // Only record peak when gestureReady just fired — avoids constant polling
         if (detector.gestureReady)
         {
             float peak = detector.GetMaxWristSpeed();
             if (peak > _maxStrikeSpeed)
                 _maxStrikeSpeed = peak;
 
-            // Reset so next strike gets a fresh peak measurement
             detector.ResetMaxWristSpeed();
         }
     }
@@ -163,7 +213,17 @@ public class RoundController : MonoBehaviour
     {
         if (!_roundActive) return;
 
-        _roundActive = false;
+        _roundActive   = false;
+        _isPaused      = false;
+        Time.timeScale = 1f;   // always restore before leaving
+
+        // Unsubscribe immediately so no stale events fire during teardown
+        if (SupabaseManager.Instance != null)
+        {
+            SupabaseManager.Instance.OnPaused  -= HandlePause;
+            SupabaseManager.Instance.OnResumed -= HandleResume;
+        }
+
         spawnManager.StopSpawning();
         scoreManager.OnScoreChanged -= EvaluateScore;
         scoreManager.OnScoreChanged -= OnScoreChangedUI;
@@ -171,7 +231,7 @@ public class RoundController : MonoBehaviour
         if (AudioManager.Instance != null) AudioManager.Instance.StopMusic();
 
         int   finalScore    = scoreManager.Score;
-        float finalDuration = Time.time - _roundStartTime;
+        float finalDuration = _elapsed;   // use our manually tracked time, not Time.time
 
         GameManager.Instance.SetGameState(GameState.GameOver);
         if (xrManager != null) xrManager.SwapToEndGame();
@@ -179,17 +239,33 @@ public class RoundController : MonoBehaviour
         Debug.Log($"[RoundController] Round ended. Timeout={timeout} Score={finalScore} " +
                   $"Duration={finalDuration:F1}s MaxSpeed={_maxStrikeSpeed:F2}m/s");
 
-        // Submit to Supabase
         if (SupabaseManager.Instance != null && !string.IsNullOrEmpty(GameSessionSettings.Instance.sessionId))
         {
             SupabaseManager.Instance.SubmitResults(
                 GameSessionSettings.Instance.sessionId,
                 finalScore,
                 finalDuration,
-                _maxStrikeSpeed
+                _maxStrikeSpeed,
+                onDone: GoToLoadingScene
             );
+        }
+        else
+        {
+            GoToLoadingScene();
         }
 
         GameManager.Instance.HandleRoundEnd(finalScore, Mathf.FloorToInt(finalDuration), timeout);
+    }
+
+    // ---------------------------------------------------------------
+    // Scene transition
+    // ---------------------------------------------------------------
+
+    void GoToLoadingScene()
+    {
+        if (SupabaseManager.Instance != null)
+            SupabaseManager.Instance.ResetForNewSession();
+
+        SceneManager.LoadScene("LoadingScene");
     }
 }

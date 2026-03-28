@@ -57,15 +57,12 @@ public class GameManager : MonoBehaviour
         if (endGameCanvas != null)
             endGameCanvas.SetActive(true);
 
-        // Round result message
         if (gameOverText != null)
             gameOverText.text = timeout ? "Time's Up!" : "Round Complete!";
 
-        // Score
         if (finalScoreText != null)
             finalScoreText.text = "SCORE: " + finalScore;
 
-        // Time
         if (finalTimeText != null)
         {
             int mins = finalTime / 60;
@@ -74,21 +71,6 @@ public class GameManager : MonoBehaviour
                 ? $"TIME: {mins}m {secs:00}s"
                 : $"TIME: {secs}s";
         }
-
-       
-    }
-
-    /// <summary>
-    /// Called by EndGameMenuController when patient requests a restart.
-    /// Notifies Supabase so the therapist sees it on the dashboard.
-    /// </summary>
-    public void RequestRestart()
-    {
-        string sessionId = GameSessionSettings.Instance?.sessionId;
-        if (SupabaseManager.Instance != null && !string.IsNullOrEmpty(sessionId))
-            SupabaseManager.Instance.RequestRestart(sessionId);
-        else
-            Debug.LogWarning("[GameManager] Cannot request restart — no session ID.");
     }
 
     public void QuitGame()

@@ -4,17 +4,15 @@ using UnityEngine.SceneManagement;
 public class EndGameMenuController : MonoBehaviour
 {
     /// <summary>
-    /// Sends restart request to Supabase so therapist sees it on dashboard,
-    /// then returns to loading scene to wait for a new session.
+    /// Returns to the loading scene so the therapist can start a new session
+    /// from the dashboard. SupabaseManager resets and polls automatically.
     /// </summary>
-    public void RequestRestart()
+    public void PlayAgain()
     {
-        // Notify Supabase that patient wants to restart
-        if (GameManager.Instance != null)
-            GameManager.Instance.RequestRestart();
-
-        // Go back to loading scene — SupabaseManager will reset and poll for new session
-        SceneManager.LoadScene("LoadingScene");
+        if (SupabaseManager.Instance != null)
+            SupabaseManager.Instance.ResetForNewSession();
+        else
+            SceneManager.LoadScene("LoadingScene");
     }
 
     /// <summary>

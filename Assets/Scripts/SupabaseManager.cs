@@ -6,7 +6,7 @@ using UnityEngine.SceneManagement;
 
 /// <summary>
 /// Handles all Supabase REST API communication.
-/// Now also polls for session_cancelled flag during active rounds.
+/// Polls for session_cancelled and session_paused flags during active rounds.
 /// </summary>
 public class SupabaseManager : MonoBehaviour
 {
@@ -16,14 +16,23 @@ public class SupabaseManager : MonoBehaviour
     const string KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qc2VsbXdmamFhaHFuenJhcHpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyMjg0MzUsImV4cCI6MjA4ODgwNDQzNX0.bVm9zGN0PDHRGl_zHg746Z2bL6FfHVHsYAdj2JJPgAU";
 
     [Header("Settings")]
-    public float pollInterval        = 2f;
-    public float cancellationCheckInterval = 3f; // how often to check for cancellation during round
-    public string loadingSceneName   = "LoadingScene";
+    public float pollInterval               = 2f;
+    public float cancellationCheckInterval  = 3f;
+    public float pauseCheckInterval         = 2f;   // how often to poll for pause during active round
+    public string loadingSceneName          = "LoadingScene";
 
     public event Action OnSessionLoaded;
 
+    // ── Pause / Resume events ──────────────────────────────────────
+    /// <summary>Fired when the therapist pauses the session from the dashboard.</summary>
+    public event Action OnPaused;
+    /// <summary>Fired when the therapist resumes the session from the dashboard.</summary>
+    public event Action OnResumed;
+
     bool _polling    = false;
-    bool _monitoring = false; // true during active round — watches for cancellation
+    bool _monitoring = false;  // cancellation monitor
+    bool _pauseMonitoring = false;
+    bool _isPaused   = false;  // last known pause state — avoids repeat events
 
     void Awake()
     {
@@ -58,13 +67,15 @@ public class SupabaseManager : MonoBehaviour
 
     public void ResetForNewSession()
     {
-        _polling    = false;
-        _monitoring = false;
+        _polling         = false;
+        _monitoring      = false;
+        _pauseMonitoring = false;
+        _isPaused        = false;
         StopAllCoroutines();
 
         if (GameSessionSettings.Instance != null)
         {
-            GameSessionSettings.Instance.sessionId         = null;
+            GameSessionSettings.Instance.sessionId          = null;
             GameSessionSettings.Instance.selectedDifficulty = null;
         }
 
@@ -107,7 +118,7 @@ public class SupabaseManager : MonoBehaviour
             yield break;
         }
 
-        string json = req.downloadHandler.text;
+        string json  = req.downloadHandler.text;
         var wrapper  = JsonUtility.FromJson<SessionArrayWrapper>("{\"items\":" + json + "}");
 
         if (wrapper == null || wrapper.items == null || wrapper.items.Length == 0)
@@ -144,7 +155,7 @@ public class SupabaseManager : MonoBehaviour
     {
         while (_monitoring)
         {
-            yield return new WaitForSeconds(cancellationCheckInterval);
+            yield return new WaitForSecondsRealtime(cancellationCheckInterval);
 
             string endpoint = $"{URL}/sessions?id=eq.{sessionId}&select=session_cancelled";
             using var req   = UnityWebRequest.Get(endpoint);
@@ -153,8 +164,8 @@ public class SupabaseManager : MonoBehaviour
 
             if (req.result != UnityWebRequest.Result.Success) continue;
 
-            string json     = req.downloadHandler.text;
-            var wrapper     = JsonUtility.FromJson<CancelArrayWrapper>("{\"items\":" + json + "}");
+            string json = req.downloadHandler.text;
+            var wrapper = JsonUtility.FromJson<CancelArrayWrapper>("{\"items\":" + json + "}");
 
             if (wrapper?.items == null || wrapper.items.Length == 0) continue;
 
@@ -162,6 +173,7 @@ public class SupabaseManager : MonoBehaviour
             {
                 Debug.Log("[Supabase] ⚠ Session cancelled by therapist — returning to loading screen.");
                 _monitoring = false;
+                StopPauseMonitoring();
                 ReturnToLoadingScene();
                 yield break;
             }
@@ -170,11 +182,75 @@ public class SupabaseManager : MonoBehaviour
 
     void ReturnToLoadingScene()
     {
-        // Stop any ongoing round
         if (GameSessionSettings.Instance != null)
             GameSessionSettings.Instance.sessionId = null;
 
+        // Make sure timescale is restored before leaving the scene
+        Time.timeScale = 1f;
+
         SceneManager.LoadScene(loadingSceneName);
+    }
+
+    // ---------------------------------------------------------------
+    // Pause monitoring — runs during active round
+    // ---------------------------------------------------------------
+
+    /// <summary>
+    /// Start polling Supabase for session_paused changes.
+    /// Call this at the same time as StartCancellationMonitoring.
+    /// Subscribe to OnPaused / OnResumed to react in your game manager.
+    /// </summary>
+    public void StartPauseMonitoring(string sessionId)
+    {
+        if (_pauseMonitoring) return;
+        _pauseMonitoring = true;
+        _isPaused        = false;
+        StartCoroutine(MonitorPause(sessionId));
+        Debug.Log("[Supabase] Started pause monitoring.");
+    }
+
+    public void StopPauseMonitoring()
+    {
+        _pauseMonitoring = false;
+        Debug.Log("[Supabase] Pause monitoring stopped.");
+    }
+
+    IEnumerator MonitorPause(string sessionId)
+    {
+        while (_pauseMonitoring)
+        {
+            // WaitForSecondsRealtime ignores Time.timeScale — essential so this
+            // coroutine keeps polling even while the game is paused (timeScale = 0)
+            yield return new WaitForSecondsRealtime(pauseCheckInterval);
+
+            string endpoint = $"{URL}/sessions?id=eq.{sessionId}&select=session_paused";
+            using var req   = UnityWebRequest.Get(endpoint);
+            AddHeaders(req);
+            yield return req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success) continue;
+
+            string json = req.downloadHandler.text;
+            var wrapper = JsonUtility.FromJson<PauseArrayWrapper>("{\"items\":" + json + "}");
+
+            if (wrapper?.items == null || wrapper.items.Length == 0) continue;
+
+            bool serverPaused = wrapper.items[0].session_paused;
+
+            // Only fire events on transitions to avoid spamming
+            if (serverPaused && !_isPaused)
+            {
+                _isPaused = true;
+                Debug.Log("[Supabase] ⏸ Session paused by therapist.");
+                OnPaused?.Invoke();
+            }
+            else if (!serverPaused && _isPaused)
+            {
+                _isPaused = false;
+                Debug.Log("[Supabase] ▶ Session resumed by therapist.");
+                OnResumed?.Invoke();
+            }
+        }
     }
 
     // ---------------------------------------------------------------
@@ -187,14 +263,20 @@ public class SupabaseManager : MonoBehaviour
             "{\"session_status\":\"active\",\"start_time\":\"" + DateTime.UtcNow.ToString("o") + "\"}",
             onDone));
 
-        // Start watching for cancellation
+        // Start both monitors when the round goes active
         StartCancellationMonitoring(sessionId);
+        StartPauseMonitoring(sessionId);
     }
 
     public void SubmitResults(string sessionId, int finalScore, float roundDuration,
         float maxStrikeSpeed, Action onDone = null)
     {
         StopCancellationMonitoring();
+        StopPauseMonitoring();
+
+        // Always restore timescale on finish in case we were paused
+        Time.timeScale = 1f;
+
         StartCoroutine(DoSubmitResults(sessionId, finalScore, roundDuration, maxStrikeSpeed, onDone));
     }
 
@@ -226,10 +308,6 @@ public class SupabaseManager : MonoBehaviour
         onDone?.Invoke();
     }
 
-    public void RequestRestart(string sessionId, Action onDone = null)
-    {
-        StartCoroutine(PatchSession(sessionId, "{\"restart_requested\":true}", onDone));
-    }
 
     public void CancelSession(string sessionId, Action onDone = null)
     {
@@ -306,6 +384,7 @@ public class SupabaseManager : MonoBehaviour
 
     [Serializable] class SessionArrayWrapper { public SessionData[] items; }
     [Serializable] class CancelArrayWrapper  { public CancelData[]  items; }
+    [Serializable] class PauseArrayWrapper   { public PauseData[]   items; }
 
     [Serializable]
     class SessionData
@@ -325,11 +404,18 @@ public class SupabaseManager : MonoBehaviour
         public int    custom_max_active_moles;
         public string session_status;
         public bool   session_cancelled;
+        public bool   session_paused;
     }
 
     [Serializable]
     class CancelData
     {
         public bool session_cancelled;
+    }
+
+    [Serializable]
+    class PauseData
+    {
+        public bool session_paused;
     }
 }
