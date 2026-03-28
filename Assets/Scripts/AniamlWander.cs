@@ -1,20 +1,25 @@
 using UnityEngine;
 using UnityEngine.AI;
 
-public class AniamlWander : MonoBehaviour
+public class AniamalWander : MonoBehaviour
 {
     public float wanderRadius = 4f;
-    public float wanderTime = 3f;
+    public float wanderTime   = 3f;
+    public Transform wanderCenter; // assign in Inspector — different for each animal
 
     NavMeshAgent agent;
-    Animator animator;
-    float timer;
+    Animator     animator;
+    float        timer;
 
     void Start()
     {
-        agent = GetComponent<NavMeshAgent>();
+        agent    = GetComponent<NavMeshAgent>();
         animator = GetComponent<Animator>();
-        timer = wanderTime;
+        timer    = wanderTime;
+
+        // If no center assigned, default to starting position
+        if (wanderCenter == null)
+            wanderCenter = transform;
     }
 
     void Update()
@@ -23,12 +28,11 @@ public class AniamlWander : MonoBehaviour
 
         if (timer >= wanderTime)
         {
-            Vector3 newPos = RandomPoint(transform.position, wanderRadius);
+            Vector3 newPos = RandomPoint(wanderCenter.position, wanderRadius);
             agent.SetDestination(newPos);
             timer = 0;
         }
 
-        // THIS LINE CONTROLS ANIMATION
         animator.SetFloat("Speed", agent.velocity.magnitude);
     }
 

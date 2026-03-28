@@ -24,7 +24,6 @@ public class GameManager : MonoBehaviour
     public TextMeshProUGUI finalScoreText;
     public TextMeshProUGUI finalTimeText;
     public TextMeshProUGUI gameOverText;       // "Round Complete!" or "Time's Up!"
-    public TextMeshProUGUI restartStatusText;  // "Restart requested — waiting for therapist..."
 
     void Awake()
     {
@@ -76,9 +75,7 @@ public class GameManager : MonoBehaviour
                 : $"TIME: {secs}s";
         }
 
-        // Clear restart status
-        if (restartStatusText != null)
-            restartStatusText.text = "";
+       
     }
 
     /// <summary>
@@ -87,9 +84,6 @@ public class GameManager : MonoBehaviour
     /// </summary>
     public void RequestRestart()
     {
-        if (restartStatusText != null)
-            restartStatusText.text = "Restart requested — waiting for therapist...";
-
         string sessionId = GameSessionSettings.Instance?.sessionId;
         if (SupabaseManager.Instance != null && !string.IsNullOrEmpty(sessionId))
             SupabaseManager.Instance.RequestRestart(sessionId);

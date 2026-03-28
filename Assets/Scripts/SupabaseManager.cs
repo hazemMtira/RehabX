@@ -2,10 +2,11 @@ using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Networking;
+using UnityEngine.SceneManagement;
 
 /// <summary>
-/// Handles all communication with Supabase REST API.
-/// Only picks up sessions assigned to THIS headset via headset_id matching.
+/// Handles all Supabase REST API communication.
+/// Now also polls for session_cancelled flag during active rounds.
 /// </summary>
 public class SupabaseManager : MonoBehaviour
 {
@@ -15,11 +16,14 @@ public class SupabaseManager : MonoBehaviour
     const string KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qc2VsbXdmamFhaHFuenJhcHpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyMjg0MzUsImV4cCI6MjA4ODgwNDQzNX0.bVm9zGN0PDHRGl_zHg746Z2bL6FfHVHsYAdj2JJPgAU";
 
     [Header("Settings")]
-    public float pollInterval = 2f;
+    public float pollInterval        = 2f;
+    public float cancellationCheckInterval = 3f; // how often to check for cancellation during round
+    public string loadingSceneName   = "LoadingScene";
 
     public event Action OnSessionLoaded;
 
-    bool _polling = false;
+    bool _polling    = false;
+    bool _monitoring = false; // true during active round — watches for cancellation
 
     void Awake()
     {
@@ -34,7 +38,7 @@ public class SupabaseManager : MonoBehaviour
     }
 
     // ---------------------------------------------------------------
-    // Polling
+    // Polling for pending session
     // ---------------------------------------------------------------
 
     public void StartPolling()
@@ -48,13 +52,15 @@ public class SupabaseManager : MonoBehaviour
     public void StopPolling()
     {
         _polling = false;
-        StopAllCoroutines();
+        StopCoroutine(nameof(PollForPendingSession));
         Debug.Log("[Supabase] Polling stopped.");
     }
 
     public void ResetForNewSession()
     {
-        StopPolling();
+        _polling    = false;
+        _monitoring = false;
+        StopAllCoroutines();
 
         if (GameSessionSettings.Instance != null)
         {
@@ -63,7 +69,7 @@ public class SupabaseManager : MonoBehaviour
         }
 
         StartPolling();
-        Debug.Log("[Supabase] Reset complete — polling for new session.");
+        Debug.Log("[Supabase] Reset — polling for new session.");
     }
 
     IEnumerator PollForPendingSession()
@@ -77,23 +83,18 @@ public class SupabaseManager : MonoBehaviour
 
     IEnumerator FetchPendingSession()
     {
-        // Wait for HeadsetManager to be ready
         if (HeadsetManager.Instance == null || !HeadsetManager.Instance.IsRegistered)
-        {
-            Debug.Log("[Supabase] Waiting for HeadsetManager to register...");
             yield break;
-        }
 
         string headsetId = HeadsetManager.Instance.HeadsetId;
         string cutoff    = DateTime.UtcNow.AddSeconds(-30).ToString("o");
 
-        // Only fetch sessions assigned to this specific headset
         string endpoint = $"{URL}/sessions" +
             $"?session_status=eq.pending" +
             $"&headset_id=eq.{headsetId}" +
+            $"&session_cancelled=eq.false" +
             $"&order=created_at.desc" +
-            $"&limit=1" +
-            $"&select=*" +
+            $"&limit=1&select=*" +
             $"&created_at=gte.{cutoff}";
 
         using var req = UnityWebRequest.Get(endpoint);
@@ -107,9 +108,7 @@ public class SupabaseManager : MonoBehaviour
         }
 
         string json = req.downloadHandler.text;
-        Debug.Log($"[Supabase] Poll response: {json}");
-
-        var wrapper = JsonUtility.FromJson<SessionArrayWrapper>("{\"items\":" + json + "}");
+        var wrapper  = JsonUtility.FromJson<SessionArrayWrapper>("{\"items\":" + json + "}");
 
         if (wrapper == null || wrapper.items == null || wrapper.items.Length == 0)
             yield break;
@@ -124,13 +123,128 @@ public class SupabaseManager : MonoBehaviour
     }
 
     // ---------------------------------------------------------------
-    // Load session into GameSessionSettings
+    // Cancellation monitoring — runs during active round
+    // ---------------------------------------------------------------
+
+    public void StartCancellationMonitoring(string sessionId)
+    {
+        if (_monitoring) return;
+        _monitoring = true;
+        StartCoroutine(MonitorCancellation(sessionId));
+        Debug.Log("[Supabase] Started cancellation monitoring.");
+    }
+
+    public void StopCancellationMonitoring()
+    {
+        _monitoring = false;
+        Debug.Log("[Supabase] Cancellation monitoring stopped.");
+    }
+
+    IEnumerator MonitorCancellation(string sessionId)
+    {
+        while (_monitoring)
+        {
+            yield return new WaitForSeconds(cancellationCheckInterval);
+
+            string endpoint = $"{URL}/sessions?id=eq.{sessionId}&select=session_cancelled";
+            using var req   = UnityWebRequest.Get(endpoint);
+            AddHeaders(req);
+            yield return req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success) continue;
+
+            string json     = req.downloadHandler.text;
+            var wrapper     = JsonUtility.FromJson<CancelArrayWrapper>("{\"items\":" + json + "}");
+
+            if (wrapper?.items == null || wrapper.items.Length == 0) continue;
+
+            if (wrapper.items[0].session_cancelled)
+            {
+                Debug.Log("[Supabase] ⚠ Session cancelled by therapist — returning to loading screen.");
+                _monitoring = false;
+                ReturnToLoadingScene();
+                yield break;
+            }
+        }
+    }
+
+    void ReturnToLoadingScene()
+    {
+        // Stop any ongoing round
+        if (GameSessionSettings.Instance != null)
+            GameSessionSettings.Instance.sessionId = null;
+
+        SceneManager.LoadScene(loadingSceneName);
+    }
+
+    // ---------------------------------------------------------------
+    // Session lifecycle
+    // ---------------------------------------------------------------
+
+    public void SetSessionActive(string sessionId, Action onDone = null)
+    {
+        StartCoroutine(PatchSession(sessionId,
+            "{\"session_status\":\"active\",\"start_time\":\"" + DateTime.UtcNow.ToString("o") + "\"}",
+            onDone));
+
+        // Start watching for cancellation
+        StartCancellationMonitoring(sessionId);
+    }
+
+    public void SubmitResults(string sessionId, int finalScore, float roundDuration,
+        float maxStrikeSpeed, Action onDone = null)
+    {
+        StopCancellationMonitoring();
+        StartCoroutine(DoSubmitResults(sessionId, finalScore, roundDuration, maxStrikeSpeed, onDone));
+    }
+
+    IEnumerator DoSubmitResults(string sessionId, int finalScore, float roundDuration,
+        float maxStrikeSpeed, Action onDone)
+    {
+        string endTime      = DateTime.UtcNow.ToString("o");
+        string sessionPatch = $"{{\"session_status\":\"finished\",\"end_time\":\"{endTime}\"}}";
+        yield return StartCoroutine(PatchSession(sessionId, sessionPatch, null));
+
+        string metricsBody = $"{{" +
+            $"\"session_id\":\"{sessionId}\"," +
+            $"\"final_score\":{finalScore}," +
+            $"\"round_duration\":{roundDuration.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}," +
+            $"\"max_strike_speed\":{maxStrikeSpeed.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}" +
+            $"}}";
+
+        using var req = new UnityWebRequest($"{URL}/session_metrics", "POST");
+        req.uploadHandler   = new UploadHandlerRaw(System.Text.Encoding.UTF8.GetBytes(metricsBody));
+        req.downloadHandler = new DownloadHandlerBuffer();
+        AddHeaders(req);
+        yield return req.SendWebRequest();
+
+        if (req.result != UnityWebRequest.Result.Success)
+            Debug.LogError($"[Supabase] Failed to insert metrics: {req.error}");
+        else
+            Debug.Log($"[Supabase] ✅ Metrics submitted.");
+
+        onDone?.Invoke();
+    }
+
+    public void RequestRestart(string sessionId, Action onDone = null)
+    {
+        StartCoroutine(PatchSession(sessionId, "{\"restart_requested\":true}", onDone));
+    }
+
+    public void CancelSession(string sessionId, Action onDone = null)
+    {
+        StartCoroutine(PatchSession(sessionId,
+            "{\"session_cancelled\":true,\"session_status\":\"finished\"}", onDone));
+    }
+
+    // ---------------------------------------------------------------
+    // Helpers
     // ---------------------------------------------------------------
 
     void LoadSessionIntoSettings(SessionData s)
     {
         var gs = GameSessionSettings.Instance;
-        if (gs == null) { Debug.LogError("[Supabase] GameSessionSettings.Instance is null!"); return; }
+        if (gs == null) return;
 
         gs.sessionId         = s.id;
         gs.patientName       = s.patient_name;
@@ -153,71 +267,13 @@ public class SupabaseManager : MonoBehaviour
         else
         {
             var presets = Resources.LoadAll<DifficultyData>("Difficulties");
-            DifficultyData match = null;
             foreach (var p in presets)
             {
                 if (string.Equals(p.name, s.difficulty_name, StringComparison.OrdinalIgnoreCase))
-                { match = p; break; }
+                { gs.selectedDifficulty = p; break; }
             }
-            if (match != null)
-                gs.selectedDifficulty = match;
-            else
-                Debug.LogWarning($"[Supabase] No DifficultyData preset found for '{s.difficulty_name}'.");
         }
     }
-
-    // ---------------------------------------------------------------
-    // Session lifecycle
-    // ---------------------------------------------------------------
-
-    public void SetSessionActive(string sessionId, Action onDone = null)
-    {
-        StartCoroutine(PatchSession(sessionId,
-            "{\"session_status\":\"active\",\"start_time\":\"" + DateTime.UtcNow.ToString("o") + "\"}",
-            onDone));
-    }
-
-    public void SubmitResults(string sessionId, int finalScore, float roundDuration, float maxStrikeSpeed, Action onDone = null)
-    {
-        StartCoroutine(DoSubmitResults(sessionId, finalScore, roundDuration, maxStrikeSpeed, onDone));
-    }
-
-    IEnumerator DoSubmitResults(string sessionId, int finalScore, float roundDuration, float maxStrikeSpeed, Action onDone)
-    {
-        string endTime      = DateTime.UtcNow.ToString("o");
-        string sessionPatch = $"{{\"session_status\":\"finished\",\"end_time\":\"{endTime}\"}}";
-        yield return StartCoroutine(PatchSession(sessionId, sessionPatch, null));
-
-        string metricsBody = $"{{" +
-            $"\"session_id\":\"{sessionId}\"," +
-            $"\"final_score\":{finalScore}," +
-            $"\"round_duration\":{roundDuration.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}," +
-            $"\"max_strike_speed\":{maxStrikeSpeed.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}" +
-            $"}}";
-
-        using var req = new UnityWebRequest($"{URL}/session_metrics", "POST");
-        req.uploadHandler   = new UploadHandlerRaw(System.Text.Encoding.UTF8.GetBytes(metricsBody));
-        req.downloadHandler = new DownloadHandlerBuffer();
-        AddHeaders(req);
-        yield return req.SendWebRequest();
-
-        if (req.result != UnityWebRequest.Result.Success)
-            Debug.LogError($"[Supabase] Failed to insert metrics: {req.error}\n{req.downloadHandler.text}");
-        else
-            Debug.Log($"[Supabase] ✅ Metrics submitted.");
-
-        onDone?.Invoke();
-    }
-
-    public void RequestRestart(string sessionId, Action onDone = null)
-    {
-        Debug.Log("[Supabase] Restart requested by patient.");
-        StartCoroutine(PatchSession(sessionId, "{\"restart_requested\":true}", onDone));
-    }
-
-    // ---------------------------------------------------------------
-    // Helpers
-    // ---------------------------------------------------------------
 
     IEnumerator PatchSession(string sessionId, string jsonBody, Action onDone)
     {
@@ -229,9 +285,9 @@ public class SupabaseManager : MonoBehaviour
         yield return req.SendWebRequest();
 
         if (req.result != UnityWebRequest.Result.Success)
-            Debug.LogError($"[Supabase] PATCH error: {req.error}\n{req.downloadHandler.text}");
+            Debug.LogError($"[Supabase] PATCH error: {req.error}");
         else
-            Debug.Log($"[Supabase] Session patched: {jsonBody}");
+            Debug.Log($"[Supabase] Patched: {jsonBody}");
 
         onDone?.Invoke();
     }
@@ -248,8 +304,8 @@ public class SupabaseManager : MonoBehaviour
     // JSON data classes
     // ---------------------------------------------------------------
 
-    [Serializable]
-    class SessionArrayWrapper { public SessionData[] items; }
+    [Serializable] class SessionArrayWrapper { public SessionData[] items; }
+    [Serializable] class CancelArrayWrapper  { public CancelData[]  items; }
 
     [Serializable]
     class SessionData
@@ -268,5 +324,12 @@ public class SupabaseManager : MonoBehaviour
         public float  custom_mole_lifetime;
         public int    custom_max_active_moles;
         public string session_status;
+        public bool   session_cancelled;
+    }
+
+    [Serializable]
+    class CancelData
+    {
+        public bool session_cancelled;
     }
 }
