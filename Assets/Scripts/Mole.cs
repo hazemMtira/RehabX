@@ -180,9 +180,18 @@ public abstract class Mole : MonoBehaviour
         }
 
         Debug.Log("HIT SUCCESSFUL");
+        // Record max strike speed only on successful hit
+        var roundController = FindObjectOfType<RoundController>();
+        if (roundController != null && detector != null)
+        {
+            float peak = detector.GetMaxWristSpeed();
+            roundController.RecordStrikeSpeed(peak);
+            detector.ResetMaxWristSpeed();
+        }
+
         OnHit();
         Die();
-    }
+        }
 
     protected void SpawnFloatingText(string text, Color color)
     {

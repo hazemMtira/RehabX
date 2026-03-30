@@ -149,6 +149,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SupabaseManager
   pollInterval: 2
+  cancellationCheckInterval: 3
+  pauseCheckInterval: 2
+  loadingSceneName: LoadingScene
 --- !u!4 &287426437
 Transform:
   m_ObjectHideFlags: 0
@@ -892,7 +895,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 1820897918385990095, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
       propertyPath: m_RequestedTrackingOriginMode
-      value: 1
+      value: 2
       objectReference: {fileID: 0}
     - target: {fileID: 2007540080720693969, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
       propertyPath: m_InteractorSource

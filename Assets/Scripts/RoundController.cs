@@ -115,7 +115,6 @@ public class RoundController : MonoBehaviour
         // touches timeScale, but we also guard with _isPaused above.
         _elapsed += Time.deltaTime;
 
-        TrackMaxStrikeSpeed();
         UpdateTimerUI(_elapsed);
 
         if (_elapsed >= _difficulty.gameDuration)
@@ -125,7 +124,11 @@ public class RoundController : MonoBehaviour
     // ---------------------------------------------------------------
     // Pause / Resume
     // ---------------------------------------------------------------
-
+    public void RecordStrikeSpeed(float speed)
+    {
+        if (speed > _maxStrikeSpeed)
+            _maxStrikeSpeed = speed;
+    }
     void HandlePause()
     {
         if (!_roundActive || _isPaused) return;
@@ -156,20 +159,6 @@ public class RoundController : MonoBehaviour
     // Max strike speed
     // ---------------------------------------------------------------
 
-    void TrackMaxStrikeSpeed()
-    {
-        var detector = GetActiveDetector();
-        if (detector == null) return;
-
-        if (detector.gestureReady)
-        {
-            float peak = detector.GetMaxWristSpeed();
-            if (peak > _maxStrikeSpeed)
-                _maxStrikeSpeed = peak;
-
-            detector.ResetMaxWristSpeed();
-        }
-    }
 
     ElbowAngleGestureDetector GetActiveDetector()
     {
