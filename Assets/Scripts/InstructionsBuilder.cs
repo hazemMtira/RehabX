@@ -104,6 +104,7 @@ public class InstructionsBuilder : MonoBehaviour
         }
 
         Build();
+        DontDestroyOnLoad(gameObject);
     }
 
     // ---------------------------------------------------------------
