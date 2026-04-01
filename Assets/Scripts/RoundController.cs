@@ -6,68 +6,41 @@ public class RoundController : MonoBehaviour
     [Header("References")]
     public SpawnManager spawnManager;
     public ScoreManager scoreManager;
-    public XRManager    xrManager;
+    //public XRManager    xrManager;
 
     [Header("Gesture Detectors")]
-    [Tooltip("Assign ElbowAngleGestureDetector on LeftHand.")]
     public ElbowAngleGestureDetector leftHandDetector;
-    [Tooltip("Assign ElbowAngleGestureDetector on RightHand.")]
     public ElbowAngleGestureDetector rightHandDetector;
 
     [Header("UI")]
     public GameUIBuilder _gameUI;
 
-    // ---------------------------------------------------------------
-    // Private state
-    // ---------------------------------------------------------------
+    // ── Private state ─────────────────────────────────────────────────────
 
-    DifficultyData _difficulty;
-    bool           _roundActive;
-    bool           _isPaused;
-    float          _elapsed;          // manually accumulated — immune to timeScale
-    float          _maxStrikeSpeed;
+    LevelConfig _config;
+    bool  _roundActive;
+    bool  _isPaused;
+    float _elapsed;
+    float _maxStrikeSpeed;
 
-    // ---------------------------------------------------------------
-    // Unity lifecycle
-    // ---------------------------------------------------------------
+    // ── Unity lifecycle ───────────────────────────────────────────────────
 
-    void Start()
-    {
-        InitRound();
-    }
-
-    void OnDestroy()
-    {
-        // Always unsubscribe to avoid stale callbacks after scene unload
-        if (SupabaseManager.Instance != null)
-        {
-            SupabaseManager.Instance.OnPaused  -= HandlePause;
-            SupabaseManager.Instance.OnResumed -= HandleResume;
-        }
-    }
+    void Start() => InitRound();
 
     void InitRound()
     {
-        if (GameSessionSettings.Instance == null)
+    _config = GameFlowController.Instance?.CurrentConfig;
+//
+    if (_config == null)
         {
-            Debug.LogError("[RoundController] GameSessionSettings missing.");
-            return;
-        }
-
-        _difficulty = GameSessionSettings.Instance.selectedDifficulty;
-
-        if (_difficulty == null)
-        {
-            Debug.LogError("[RoundController] No difficulty selected.");
+            Debug.LogError("[RoundController] No LevelConfig available from GameFlowController.");
             return;
         }
 
         StartRound();
     }
 
-    // ---------------------------------------------------------------
-    // Round flow
-    // ---------------------------------------------------------------
+    // ── Round flow ────────────────────────────────────────────────────────
 
     public void StartRound()
     {
@@ -76,33 +49,25 @@ public class RoundController : MonoBehaviour
         _elapsed        = 0f;
         _maxStrikeSpeed = 0f;
 
-        // Subscribe to pause / resume events from Supabase
-        if (SupabaseManager.Instance != null)
-        {
-            SupabaseManager.Instance.OnPaused  += HandlePause;
-            SupabaseManager.Instance.OnResumed += HandleResume;
-        }
+        ApplyHandSetting();
 
-        // Reset peak speed tracker on detector
         var detector = GetActiveDetector();
         if (detector != null) detector.ResetMaxWristSpeed();
 
-        // Tell Supabase the round is now active
-        if (SupabaseManager.Instance != null && !string.IsNullOrEmpty(GameSessionSettings.Instance.sessionId))
-            SupabaseManager.Instance.SetSessionActive(GameSessionSettings.Instance.sessionId);
-
         GameManager.Instance.SetGameState(GameState.Playing);
-        scoreManager.ResetScore();
-        scoreManager.OnScoreChanged += OnScoreChangedUI;
+
+        scoreManager.ResetLevelScore();
+
+        // FIX: signature matches Action<int, int>
         scoreManager.OnScoreChanged += EvaluateScore;
 
         if (_gameUI != null) _gameUI.UpdateScore(0);
 
-        spawnManager.currentDifficulty = _difficulty;
-        spawnManager.StartSpawning();
+        spawnManager.currentConfig = _config;
+        spawnManager.StartSpawner();
 
         if (AudioManager.Instance != null) AudioManager.Instance.StartMusic();
-        if (xrManager != null) xrManager.SwapToGameplay();
+       // if (xrManager != null)            xrManager.SwapToGameplay();
 
         Debug.Log("[RoundController] Round started.");
     }
@@ -111,92 +76,59 @@ public class RoundController : MonoBehaviour
     {
         if (!_roundActive || _isPaused) return;
 
-        // Use unscaled delta so this is resilient even if something else
-        // touches timeScale, but we also guard with _isPaused above.
         _elapsed += Time.deltaTime;
-
         UpdateTimerUI(_elapsed);
 
-        if (_elapsed >= _difficulty.gameDuration)
+        if (_elapsed >= _config.gameDuration)
             EndRound(true);
     }
 
-    // ---------------------------------------------------------------
-    // Pause / Resume
-    // ---------------------------------------------------------------
-    public void RecordStrikeSpeed(float speed)
+    // ── Hand control ──────────────────────────────────────────────────────
+
+    void ApplyHandSetting()
     {
-        if (speed > _maxStrikeSpeed)
-            _maxStrikeSpeed = speed;
+        var hand = GameFlowController.Instance?.ActiveHand;
+
+        bool useLeft  = hand == "left"  || hand == "both" || string.IsNullOrEmpty(hand);
+        bool useRight = hand == "right" || hand == "both" || string.IsNullOrEmpty(hand);
+
+        if (leftHandDetector  != null) leftHandDetector.gameObject.SetActive(useLeft);
+        if (rightHandDetector != null) rightHandDetector.gameObject.SetActive(useRight);
     }
-    void HandlePause()
-    {
-        if (!_roundActive || _isPaused) return;
-
-        _isPaused       = true;
-        Time.timeScale  = 0f;
-
-        spawnManager.StopSpawning();
-        if (AudioManager.Instance != null) AudioManager.Instance.StopMusic();
-
-        Debug.Log("[RoundController] Round paused.");
-    }
-
-    void HandleResume()
-    {
-        if (!_roundActive || !_isPaused) return;
-
-        _isPaused       = false;
-        Time.timeScale  = 1f;
-
-        spawnManager.StartSpawning();
-        if (AudioManager.Instance != null) AudioManager.Instance.StartMusic();
-
-        Debug.Log("[RoundController] Round resumed.");
-    }
-
-    // ---------------------------------------------------------------
-    // Max strike speed
-    // ---------------------------------------------------------------
-
 
     ElbowAngleGestureDetector GetActiveDetector()
     {
-        var hand = GameSessionSettings.Instance.selectedHand;
-        return hand == HandType.Left ? leftHandDetector : rightHandDetector;
+        var hand = GameFlowController.Instance?.ActiveHand;
+        return hand == "left" ? leftHandDetector : rightHandDetector;
     }
 
-    // ---------------------------------------------------------------
-    // Timer UI
-    // ---------------------------------------------------------------
+    // ── Timer UI ──────────────────────────────────────────────────────────
 
     void UpdateTimerUI(float elapsed)
     {
-        if (_gameUI == null) return;
-        float remaining = Mathf.Max(0f, _difficulty.gameDuration - elapsed);
+        if (_gameUI == null || _config == null) return;
+        float remaining = Mathf.Max(0f, _config.gameDuration - elapsed);
         _gameUI.UpdateTimer(remaining);
     }
 
-    // ---------------------------------------------------------------
-    // Score
-    // ---------------------------------------------------------------
+    // ── Score ─────────────────────────────────────────────────────────────
 
-    void EvaluateScore(int score)
+    // FIX: two-arg signature to match Action<int, int>
+    void EvaluateScore(int total, int thisLevel)
     {
         if (!_roundActive) return;
-        if (score >= _difficulty.requiredScore)
+        if (thisLevel >= _config.requiredScore)
             EndRound(false);
     }
 
-    void OnScoreChangedUI(int score)
+    // ── Max strike speed ──────────────────────────────────────────────────
+
+    public void RecordStrikeSpeed(float speed)
     {
-        if (_gameUI != null)
-            _gameUI.UpdateScore(score);
+        if (speed > _maxStrikeSpeed) _maxStrikeSpeed = speed;
     }
 
-    // ---------------------------------------------------------------
-    // End round
-    // ---------------------------------------------------------------
+    // ── End round ─────────────────────────────────────────────────────────
 
     void EndRound(bool timeout)
     {
@@ -204,39 +136,31 @@ public class RoundController : MonoBehaviour
 
         _roundActive   = false;
         _isPaused      = false;
-        Time.timeScale = 1f;   // always restore before leaving
+        Time.timeScale = 1f;
 
-        // Unsubscribe immediately so no stale events fire during teardown
-        if (SupabaseManager.Instance != null)
-        {
-            SupabaseManager.Instance.OnPaused  -= HandlePause;
-            SupabaseManager.Instance.OnResumed -= HandleResume;
-        }
+        spawnManager.StopSpawner();
 
-        spawnManager.StopSpawning();
+        // FIX: unsubscribe matching signature
         scoreManager.OnScoreChanged -= EvaluateScore;
-        scoreManager.OnScoreChanged -= OnScoreChangedUI;
 
         if (AudioManager.Instance != null) AudioManager.Instance.StopMusic();
 
-        int   finalScore    = scoreManager.Score;
-        float finalDuration = _elapsed;   // use our manually tracked time, not Time.time
+        // FIX: ScoreManager has no .Score property — correct property is .ScoreThisLevel
+        int   finalScore    = scoreManager.ScoreThisLevel;
+        float finalDuration = _elapsed;
 
         GameManager.Instance.SetGameState(GameState.GameOver);
-        if (xrManager != null) xrManager.SwapToEndGame();
+        //if (xrManager != null) xrManager.SwapToEndGame();
 
-        Debug.Log($"[RoundController] Round ended. Timeout={timeout} Score={finalScore} " +
-                  $"Duration={finalDuration:F1}s MaxSpeed={_maxStrikeSpeed:F2}m/s");
+        Debug.Log($"[RoundController] Round ended. Timeout={timeout} Score={finalScore} Duration={finalDuration:F1}s MaxSpeed={_maxStrikeSpeed:F2}");
 
-        if (SupabaseManager.Instance != null && !string.IsNullOrEmpty(GameSessionSettings.Instance.sessionId))
+        var bridge    = SupabaseGameBridge.Instance;
+        var sessionId = SupabaseGameBridge.Instance?.CurrentSessionId;
+
+        if (bridge != null && !string.IsNullOrEmpty(sessionId))
         {
-            SupabaseManager.Instance.SubmitResults(
-                GameSessionSettings.Instance.sessionId,
-                finalScore,
-                finalDuration,
-                _maxStrikeSpeed,
-                onDone: GoToLoadingScene
-            );
+            GameFlowController.Instance?.RecordKpi("maxStrikeSpeed", _maxStrikeSpeed);
+            bridge.NotifyLevelResult(timeout, GoToLoadingScene);
         }
         else
         {
@@ -246,15 +170,10 @@ public class RoundController : MonoBehaviour
         GameManager.Instance.HandleRoundEnd(finalScore, Mathf.FloorToInt(finalDuration), timeout);
     }
 
-    // ---------------------------------------------------------------
-    // Scene transition
-    // ---------------------------------------------------------------
+    // ── Scene transition ──────────────────────────────────────────────────
 
     void GoToLoadingScene()
     {
-        if (SupabaseManager.Instance != null)
-            SupabaseManager.Instance.ResetForNewSession();
-
         SceneManager.LoadScene("LoadingScene");
     }
 }

@@ -1,23 +1,30 @@
-/*using UnityEngine;
-using TMPro;
 using System.Collections;
 using System.Collections.Generic;
-//a verifier 
+using UnityEngine;
+using TMPro;
+
 public class GameFlowController : MonoBehaviour
 {
     public static GameFlowController Instance { get; private set; }
 
+    
+    private ElbowAngleGestureDetector gestureDetector ;
+   
+
+    [Header("Experience")]
+    
+    public ExperienceConfig experienceConfig;
+
+
     [Header("Gameplay objects")]
-    public GameObject bubbleSpawner;
+    public GameObject moleSpawner;
     public GameObject scoreUI;
     public GameObject timerUI;
     public GameObject gameManager;
 
     [Header("UI")]
     public TextMeshProUGUI scoreText;
-
-    [Header("Controllers")]
-    public GameTimer gameTimer;
+    public GameTimer       gameTimer;
 
     [Header("Hand roots")]
     public GameObject leftHandRoot;
@@ -29,51 +36,86 @@ public class GameFlowController : MonoBehaviour
     [Header("Param schema (describes custom params to the dashboard)")]
     public ParamSchema[] paramSchema;
 
+    [Header("KPI schema (metrics sent back to dashboard after each session)")]
+    public KpiSchema[] kpiSchema;
+
+    // ── Runtime state ─────────────────────────────────────────────────────
+
+    /// <summary>"left" | "right" | "both" | null</summary>
+    public string ActiveHand   { get; private set; }
+
+    
+
     public int         Level         { get; private set; }
     public bool        AutoMode      { get; private set; }
     public LevelConfig CurrentConfig { get; private set; }
-    public BubbleManager Spawner     { get; private set; }
-    public bool        IsResetting   { get; private set; } = false;
+    public bool        IsResetting   { get; private set; }
 
-    private bool _usingRuntimeConfig = false;
-    private bool _levelPassed        = false;
+    private readonly Dictionary<string, object> _kpiData = new Dictionary<string, object>();
+    private bool _usingRuntimeConfig;
+    private bool _levelPassed;
+
+    // ── Cached references ─────────────────────────────────────────────────
+    private SpawnManager _spawner;
+    private SpawnManager Spawner => _spawner != null ? _spawner : (_spawner = FindObjectOfType<SpawnManager>());
 
     // ─────────────────────────────────────────────────────────────────────
-    #region Unity lifecycle
-
     void Awake()
     {
         if (Instance == null) Instance = this;
         else { Destroy(gameObject); return; }
+        
     }
 
     void Start()
     {
-        Spawner = FindObjectOfType<BubbleManager>();
         ScoreManager.Instance.OnScoreChanged += HandleScoreChanged;
         UpdateScoreDisplay(0, 0);
     }
+    public void StartGameplay()
+    {
+        if (Spawner == null)
+        {
+            Debug.LogError("❌ SpawnManager not found!");
+            return;
+        }
 
+        if (CurrentConfig == null)
+        {
+            Debug.LogError("❌ CurrentConfig is NULL!");
+            return;
+        }
+
+        Debug.Log("🚀 Starting gameplay...");
+
+        Spawner.currentConfig = CurrentConfig;
+        Spawner.StartSpawner();
+
+        GameTimer.Instance?.ResetAndStart();
+    }
     void OnDestroy()
     {
         if (ScoreManager.Instance != null)
             ScoreManager.Instance.OnScoreChanged -= HandleScoreChanged;
     }
 
-    #endregion
-    // ─────────────────────────────────────────────────────────────────────
-    #region Session lifecycle
+    // ── Session lifecycle ─────────────────────────────────────────────────
 
     public void PrepareForSession()
     {
+        _kpiData.Clear();
         _usingRuntimeConfig = false;
-        if (bubbleSpawner) bubbleSpawner.SetActive(true);
-        if (scoreUI)       scoreUI.SetActive(true);
-        if (timerUI)       timerUI.SetActive(true);
-        if (gameManager)   gameManager.SetActive(true);
+
+        if (moleSpawner) moleSpawner.SetActive(true);
+        if (scoreUI)      scoreUI.SetActive(true);
+        if (timerUI)      timerUI.SetActive(true);
+        if (gameManager)  gameManager.SetActive(true);
+
         if (leftHandRoot)  leftHandRoot.SetActive(false);
         if (rightHandRoot) rightHandRoot.SetActive(false);
-        bubbleSpawner?.GetComponent<BubbleManager>()?.HardStart("PrepareForSession");
+        if (gestureDetector != null) gestureDetector.ResetMaxWristSpeed();
+        // MolePoolManager is a lazy pool — no HardStart needed.
+        // Moles are instantiated on demand the first time GetMole() is called.
     }
 
     public void SetAutoMode(bool enabled) { AutoMode = enabled; }
@@ -84,81 +126,110 @@ public class GameFlowController : MonoBehaviour
         _levelPassed  = false;
         CurrentConfig = GetConfig(Level);
         _usingRuntimeConfig = false;
+
         if (!AutoMode) ScoreManager.Instance.ResetAll();
         else           ScoreManager.Instance.ResetLevelScore();
-        var sp = FindObjectOfType<BubbleManager>();
-        if (sp != null) sp.allowSpawning = true;
+
+        if (Spawner != null)
+            Spawner.currentConfig = CurrentConfig;
     }
 
-    /// <summary>
-    /// Builds a runtime LevelConfig from the flat dictionary the dashboard
-    /// sends in custom_params. Handles all bubble-specific parameters.
-    /// Unknown keys are silently ignored so new params don't break old APKs.
-    /// </summary>
+    // ── Interaction mode ──────────────────────────────────────────────────
+
+        public void SetInteractionMode(string hand)
+    {
+        ActiveHand = hand;
+        ApplyHandRoots(hand);
+
+        Debug.Log($"[GFC] Interaction — hand={hand}");
+    }
+
+private void ApplyHandRoots(string hand)
+{
+    if (leftHandRoot)  leftHandRoot.SetActive(hand == "left");
+    if (rightHandRoot) rightHandRoot.SetActive(hand == "right");
+
+    // Assign ONLY one detector
+    if (hand == "left" && leftHandRoot != null)
+    {
+        gestureDetector = leftHandRoot.GetComponentInChildren<ElbowAngleGestureDetector>(true);
+    }
+    else if (hand == "right" && rightHandRoot != null)
+    {
+        gestureDetector = rightHandRoot.GetComponentInChildren<ElbowAngleGestureDetector>(true);
+    }
+    else
+    {
+        gestureDetector = null;
+    }
+
+    Debug.Log("GestureDetector = " + gestureDetector);
+}
+
+    // ── KPI recording ─────────────────────────────────────────────────────
+
+    public void RecordKpi(string key, object value)
+    {
+        _kpiData[key] = value;
+        Debug.Log($"[GFC] KPI recorded: {key} = {value}");
+    }
+
+   public Dictionary<string, object> CollectKpiData()
+{
+    if (HasKpi("score") && !_kpiData.ContainsKey("score"))
+        _kpiData["score"] = ScoreManager.Instance.ScoreThisLevel;
+
+    if (HasKpi("duration") && !_kpiData.ContainsKey("duration"))
+        _kpiData["duration"] = Mathf.RoundToInt(GameTimer.Instance?.ElapsedSeconds ?? 0);
+
+    // ── Debug every condition individually ────────────────────────────
+    Debug.Log($"[KPI] HasKpi('maxStrikeSpeed')       = {HasKpi("maxStrikeSpeed")}");
+    Debug.Log($"[KPI] already in _kpiData            = {_kpiData.ContainsKey("maxStrikeSpeed")}");
+    Debug.Log($"[KPI] gestureDetector != null         = {gestureDetector != null}");
+    if (gestureDetector != null)
+        Debug.Log($"[KPI] GetMaxWristSpeed()             = {gestureDetector.GetMaxWristSpeed()}");
+
+    if (HasKpi("maxStrikeSpeed") && !_kpiData.ContainsKey("maxStrikeSpeed") && gestureDetector != null)
+        _kpiData["maxStrikeSpeed"] = gestureDetector.GetMaxWristSpeed();
+
+    Debug.Log($"[KPI] Final _kpiData keys: {string.Join(", ", _kpiData.Keys)}");
+
+    return new Dictionary<string, object>(_kpiData);
+}
+
+    private bool HasKpi(string key)
+    {
+        if (kpiSchema == null) return false;
+        foreach (var k in kpiSchema) if (k != null && k.key == key) return true;
+        return false;
+    }
+
+    // ── Custom config ─────────────────────────────────────────────────────
+
     public void ApplyCustomConfig(Dictionary<string, object> p)
     {
-        var cfg = ScriptableObject.CreateInstance<LevelConfig>();
+        var cfg   = ScriptableObject.CreateInstance<LevelConfig>();
         cfg.level = Level;
 
-        // ── Progression ───────────────────────────────────────────────────
-        cfg.targetScore = GetInt  (p, "targetScore", CurrentConfig?.targetScore ?? 15);
-        cfg.totalTime   = GetFloat(p, "totalTime",   CurrentConfig?.totalTime   ?? 300f);
-
-        // ── Spawn positioning ─────────────────────────────────────────────
-        cfg.spawnDistance = GetFloat(p, "spawnDistance", CurrentConfig?.spawnDistance ?? 2f);
-
-        // horizontalSpread is the symmetric half-width: [-spread, +spread]
-        float hSpread = GetFloat(p, "horizontalSpread",
-            CurrentConfig != null ? CurrentConfig.horizontalRange.y : 0.5f);
-        cfg.horizontalRange = new Vector2(-hSpread, hSpread);
-
-        float vMin = GetFloat(p, "verticalMin",
-            CurrentConfig != null ? CurrentConfig.verticalRange.x : 0.5f);
-        float vMax = GetFloat(p, "verticalMax",
-            CurrentConfig != null ? CurrentConfig.verticalRange.y : 1.5f);
-        cfg.verticalRange = new Vector2(vMin, vMax);
-
-        // ── Spawn timing ──────────────────────────────────────────────────
-        cfg.spawnInterval = GetFloat(p, "spawnInterval", CurrentConfig?.spawnInterval ?? 2f);
-        cfg.poolSize      = GetInt  (p, "poolSize",      CurrentConfig?.poolSize      ?? 20);
-
-        // ── Lifetime ──────────────────────────────────────────────────────
-        cfg.minLifetime = GetFloat(p, "minLifetime", CurrentConfig?.minLifetime ?? 2f);
-        cfg.maxLifetime = GetFloat(p, "maxLifetime", CurrentConfig?.maxLifetime ?? 5f);
-
-        // ── Accessibility ─────────────────────────────────────────────────
-        cfg.bubbleScale = GetFloat(p, "bubbleScale", CurrentConfig?.bubbleScale ?? 1f);
-
+        cfg.requiredScore  = GetInt  (p, "requiredScore",  CurrentConfig?.requiredScore  ?? 15);
+        cfg.gameDuration   = GetFloat(p, "gameDuration",   CurrentConfig?.gameDuration   ?? 60f);
+        cfg.spawnInterval  = GetFloat(p, "spawnInterval",  CurrentConfig?.spawnInterval  ?? 1.25f);
+        cfg.moleLifetime   = GetFloat(p, "moleLifetime",   CurrentConfig?.moleLifetime   ?? 8f);
+        cfg.moleSpeed      = GetFloat(p, "moleSpeed",      CurrentConfig?.moleSpeed      ?? 2.5f);
+        cfg.maxActiveMoles = GetInt  (p, "maxActiveMoles", CurrentConfig?.maxActiveMoles ?? 3);
+        cfg.levelPosition  = GetVector3(p, "levelPosition",  CurrentConfig?.levelPosition  ?? Vector3.zero);
         CurrentConfig       = cfg;
         _usingRuntimeConfig = true;
 
-        // Apply bubble scale immediately if spawner is active
-        ApplyBubbleScale(cfg.bubbleScale);
+        if (Spawner != null) Spawner.currentConfig = CurrentConfig;
 
-        Debug.Log($"[GFC] Custom config applied — spawn:{cfg.spawnInterval:F2}s  " +
-                  $"lifetime:{cfg.minLifetime:F1}-{cfg.maxLifetime:F1}s  " +
-                  $"spread:{hSpread:F2}  h:{vMin:F2}-{vMax:F2}  scale:{cfg.bubbleScale:F2}");
+        Debug.Log($"[GFC] ✅ Custom config applied: " +
+                  $"requiredScore={cfg.requiredScore} gameDuration={cfg.gameDuration} " +
+                  $"spawnInterval={cfg.spawnInterval} moleLifetime={cfg.moleLifetime} " +
+                  $"moleSpeed={cfg.moleSpeed} maxActiveMoles={cfg.maxActiveMoles} levelPosition={cfg.levelPosition}");
     }
 
-    /// <summary>
-    /// Sets the localScale of the bubble prefab root so all spawned bubbles
-    /// use the age-appropriate size without changing the prefab asset.
-    /// </summary>
-    void ApplyBubbleScale(float scale)
-    {
-        if (scale <= 0f || Mathf.Approximately(scale, 1f)) return;
-
-        var spawner = FindObjectOfType<BubbleManager>();
-        if (spawner == null || spawner.bubblePrefab == null) return;
-
-        // Scale already-active bubbles in pool
-        foreach (var b in FindObjectsOfType<BubblePopper>())
-            b.transform.localScale = Vector3.one * scale;
-    }
-
-    #endregion
-    // ─────────────────────────────────────────────────────────────────────
-    #region Param dict helpers
+    // ── Param helpers ─────────────────────────────────────────────────────
 
     static float GetFloat(Dictionary<string, object> d, string key, float fallback)
     {
@@ -166,11 +237,9 @@ public class GameFlowController : MonoBehaviour
         if (v is float  f)  return f;
         if (v is int    i)  return i;
         if (v is double db) return (float)db;
-        float.TryParse(v.ToString(),
-            System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out float r);
-        return r == 0 ? fallback : r;
+        float.TryParse(v.ToString(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out float result);
+        return result == 0 ? fallback : result;
     }
 
     static int GetInt(Dictionary<string, object> d, string key, int fallback)
@@ -182,15 +251,41 @@ public class GameFlowController : MonoBehaviour
         if (v is bool b) return b;
         return v.ToString() == "1" || v.ToString().ToLower() == "true";
     }
+   static Vector3 GetVector3(Dictionary<string, object> d, string key, Vector3 fallback)
+{
+    if (!d.TryGetValue(key, out var v) || v == null) return fallback;
 
-    #endregion
-    // ─────────────────────────────────────────────────────────────────────
-    #region Score
+    if (v is Vector3 vec) return vec;
+
+    // If coming from JSON or dashboard (likely Dictionary or array)
+    if (v is Dictionary<string, object> dict)
+    {
+        float x = dict.ContainsKey("x") ? float.Parse(dict["x"].ToString()) : 0;
+        float y = dict.ContainsKey("y") ? float.Parse(dict["y"].ToString()) : 0;
+        float z = dict.ContainsKey("z") ? float.Parse(dict["z"].ToString()) : 0;
+        return new Vector3(x, y, z);
+    }
+
+    // If it's a string like "1,2,3"
+    var parts = v.ToString().Split(',');
+    if (parts.Length == 3)
+    {
+        float.TryParse(parts[0], out float x);
+        float.TryParse(parts[1], out float y);
+        float.TryParse(parts[2], out float z);
+        return new Vector3(x, y, z);
+    }
+
+    return fallback;
+}
+    // ── Score ─────────────────────────────────────────────────────────────
 
     void HandleScoreChanged(int total, int thisLevel)
     {
         UpdateScoreDisplay(total, thisLevel);
-        if (!_levelPassed && CurrentConfig != null && thisLevel >= CurrentConfig.targetScore)
+        _kpiData["score"] = thisLevel;
+
+        if (!_levelPassed && CurrentConfig != null && thisLevel >= CurrentConfig.requiredScore)
         {
             _levelPassed = true;
             OnLevelCompleted();
@@ -202,13 +297,18 @@ public class GameFlowController : MonoBehaviour
         if (scoreText != null) scoreText.text = "Score: " + thisLevel;
     }
 
-    #endregion
-    // ─────────────────────────────────────────────────────────────────────
-    #region Level complete
+    // ── Level complete ────────────────────────────────────────────────────
 
     void OnLevelCompleted()
     {
-        FindObjectOfType<BubbleManager>()?.StopSpawner();
+        Spawner?.StopSpawner();
+
+        _kpiData["score"]    = ScoreManager.Instance.ScoreThisLevel;
+        _kpiData["duration"] = Mathf.RoundToInt(GameTimer.Instance?.ElapsedSeconds ?? 0);
+        if (HasKpi("maxStrikeSpeed") && gestureDetector != null)
+        {
+            _kpiData["maxStrikeSpeed"] = gestureDetector.GetMaxWristSpeed();
+        }
 
         if (AutoMode && Level < (levelConfigs?.Length ?? 1) && !_usingRuntimeConfig)
         {
@@ -223,51 +323,55 @@ public class GameFlowController : MonoBehaviour
         }
     }
 
-    #endregion
-    // ─────────────────────────────────────────────────────────────────────
-    #region Game over
+    // ── Game over ─────────────────────────────────────────────────────────
 
     public void OnGameOver()
     {
-        FindObjectOfType<BubbleManager>()?.StopSpawner();
+        Spawner?.StopSpawner();
+
+        _kpiData["score"]    = ScoreManager.Instance.ScoreThisLevel;
+        _kpiData["duration"] = Mathf.RoundToInt(GameTimer.Instance?.ElapsedSeconds ?? 0);
+        if (HasKpi("maxStrikeSpeed") && gestureDetector != null)
+        {
+            _kpiData["maxStrikeSpeed"] = gestureDetector.GetMaxWristSpeed();
+        }
         SupabaseGameBridge.Instance?.NotifyLevelResult(true,
             () => SupabaseGameBridge.Instance?.NotifySessionEnd());
+
         StartCoroutine(ResetToLevelSelection());
     }
 
-    #endregion
-    // ─────────────────────────────────────────────────────────────────────
-    #region Auto advance
+    // ── Auto advance ──────────────────────────────────────────────────────
 
     IEnumerator AutoNextLevel()
     {
         yield return new WaitForSecondsRealtime(1.5f);
+
         Level         = Mathf.Clamp(Level + 1, 1, levelConfigs?.Length ?? 1);
         _levelPassed  = false;
         CurrentConfig = GetConfig(Level);
         ScoreManager.Instance.ResetLevelScore();
+        _kpiData.Clear();
+
         SupabaseGameBridge.Instance?.NotifyLevelAdvance(Level);
 
-        if (bubbleSpawner) bubbleSpawner.SetActive(true);
-        if (scoreUI)       scoreUI.SetActive(true);
-        if (timerUI)       timerUI.SetActive(true);
-        if (gameManager)   gameManager.SetActive(true);
+        if (moleSpawner) moleSpawner.SetActive(true);
+        if (scoreUI)      scoreUI.SetActive(true);
+        if (timerUI)      timerUI.SetActive(true);
+        if (gameManager)  gameManager.SetActive(true);
 
-        var sp = bubbleSpawner?.GetComponent<BubbleManager>();
-        if (sp != null) StartCoroutine(DelayBeforeStart(sp, 0.75f));
+        if (Spawner != null) StartCoroutine(DelayBeforeStart(Spawner, 0.75f));
     }
 
-    IEnumerator DelayBeforeStart(BubbleManager spawner, float delay)
+    IEnumerator DelayBeforeStart(SpawnManager spawner, float delay)
     {
         yield return new WaitForSecondsRealtime(delay);
-        spawner.allowSpawning = true;
-        spawner.HardStart("AutoNextLevel");
+        spawner.currentConfig = CurrentConfig;
+        spawner.StartSpawner();
         GameTimer.Instance?.ResetAndStart();
     }
 
-    #endregion
-    // ─────────────────────────────────────────────────────────────────────
-    #region Reset
+    // ── Reset ─────────────────────────────────────────────────────────────
 
     public IEnumerator ResetToLevelSelection()
     {
@@ -275,14 +379,18 @@ public class GameFlowController : MonoBehaviour
         yield return new WaitForSecondsRealtime(2f);
 
         GameTimer.Instance?.StopTimer();
-        FindObjectOfType<BubbleManager>()?.StopSpawner();
-        if (bubbleSpawner) bubbleSpawner.SetActive(false);
-        if (scoreUI)       scoreUI.SetActive(false);
-        if (timerUI)       timerUI.SetActive(false);
-        if (gameManager)   gameManager.SetActive(false);
+        Spawner?.StopSpawner();
+
+        if (moleSpawner) moleSpawner.SetActive(false);
+        if (scoreUI)      scoreUI.SetActive(false);
+        if (timerUI)      timerUI.SetActive(false);
+        if (gameManager)  gameManager.SetActive(false);
+
         if (leftHandRoot)  leftHandRoot.SetActive(true);
         if (rightHandRoot) rightHandRoot.SetActive(true);
+
         ScoreManager.Instance.ResetAll();
+        _kpiData.Clear();
 
         if (_usingRuntimeConfig && CurrentConfig != null)
         {
@@ -290,8 +398,13 @@ public class GameFlowController : MonoBehaviour
             _usingRuntimeConfig = false;
         }
 
-        Level = 0; _levelPassed = false; AutoMode = false; CurrentConfig = null;
-        IsResetting = false;
+        Level         = 0;
+        _levelPassed  = false;
+        AutoMode      = false;
+        CurrentConfig = null;
+        ActiveHand    = null;
+        IsResetting   = false;
+
         Debug.Log("[GFC] ✅ Reset complete.");
     }
 
@@ -300,6 +413,4 @@ public class GameFlowController : MonoBehaviour
         if (levelConfigs == null || levelConfigs.Length == 0) return null;
         return levelConfigs[Mathf.Clamp(level - 1, 0, levelConfigs.Length - 1)];
     }
-
-    #endregion
-}*/
+}

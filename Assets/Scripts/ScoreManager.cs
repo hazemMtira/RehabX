@@ -1,51 +1,51 @@
 using UnityEngine;
-using TMPro;
 using System;
 
+
+/// </summary>
 public class ScoreManager : MonoBehaviour
 {
-    public static ScoreManager Instance;
+    public static ScoreManager Instance { get; private set; }
 
-    public int Score { get; private set; }
+    public int TotalScore { get; private set; }
+    public int ScoreThisLevel { get; private set; }
 
-    [Header("UI")]
-    public TextMeshProUGUI scoreText;
-
-    public event Action<int> OnScoreChanged;
+    /// <summary>Fired whenever score changes. Passes (totalScore, scoreThisLevel).</summary>
+    public event Action<int, int> OnScoreChanged;
 
     void Awake()
     {
-        if (Instance == null)
-            Instance = this;
-        else
-            Destroy(gameObject);
+        if (Instance == null) Instance = this;
+        else { Destroy(gameObject); return; }
     }
 
-    void Start()
+    /// <summary>Add (or subtract) points. Clamps both values to >= 0.</summary>
+    public void AddScore(int value)
     {
-        ResetScore();
+        // Ignore negative additions when already at zero
+        if (value < 0 && TotalScore <= 0) return;
+
+        TotalScore += value;
+        ScoreThisLevel += value;
+
+        if (TotalScore < 0) TotalScore = 0;
+        if (ScoreThisLevel < 0) ScoreThisLevel = 0;
+
+        OnScoreChanged?.Invoke(TotalScore, ScoreThisLevel);
     }
 
-    public void AddScore(int amount)
+    /// <summary>Called by GameFlowController at the start of each new level.</summary>
+    public void ResetLevelScore()
     {
-        if (GameManager.Instance.CurrentState != GameState.Playing)
-            return;
-
-        Score += amount;
-        UpdateUI();
-        OnScoreChanged?.Invoke(Score);
+        ScoreThisLevel = 0;
+        OnScoreChanged?.Invoke(TotalScore, ScoreThisLevel);
     }
 
-    public void ResetScore()
+    /// <summary>Called when returning to main menu (full reset).</summary>
+    public void ResetAll()
     {
-        Score = 0;
-        UpdateUI();
-        OnScoreChanged?.Invoke(Score);
-    }
-
-    void UpdateUI()
-    {
-        if (scoreText != null)
-            scoreText.text = Score.ToString();
+        TotalScore = 0;
+        ScoreThisLevel = 0;
+        OnScoreChanged?.Invoke(TotalScore, ScoreThisLevel);
     }
 }

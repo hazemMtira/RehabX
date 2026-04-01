@@ -1,10 +1,10 @@
-/*using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
-//a verifier
+
 public class SupabaseGameBridge : MonoBehaviour
 {
     public static SupabaseGameBridge Instance { get; private set; }
@@ -15,7 +15,7 @@ public class SupabaseGameBridge : MonoBehaviour
     public string KEY;
 
     const string PREFS_ID_KEY = "headset_uuid";
-    const float HEARTBEAT_INTERVAL = 5f;
+    const float  HEARTBEAT_INTERVAL = 5f;
 
     [Header("UI")]
     public TextMeshProUGUI loadingText;
@@ -26,10 +26,10 @@ public class SupabaseGameBridge : MonoBehaviour
     public bool   IsGameInProgress { get; private set; }
     public string CurrentSessionId { get; private set; }
 
-    private bool  _isPaused      = false;
-    private bool  _stopHandled   = false;
+    private bool  _isPaused    = false;
+    private bool  _stopHandled = false;
     private float _sessionStart;
-    private bool  _initialized   = false;
+    private bool  _initialized = false;
 
     // ─────────────────────────────────────────────────────────────────────
     #region Unity lifecycle
@@ -67,49 +67,13 @@ public class SupabaseGameBridge : MonoBehaviour
 
         ShowLoading("Connecting…");
         yield return UpsertHeadset();
-
-        // ── Wait for GameFlowController to be ready ──────────────────────────
         yield return WaitForGameFlowController();
-
         yield return SyncExperienceToSupabase();
 
         _initialized = true;
         HideLoading();
         StartCoroutine(HeartbeatLoop());
         StartCoroutine(SessionPollLoop());
-    }
-    static string ExtractJsonbField(string jsonArray, string fieldName)
-    {
-        string search = $"\"{fieldName}\":";
-        int keyIdx = jsonArray.IndexOf(search, StringComparison.Ordinal);
-        if (keyIdx < 0) return null;
-
-        int valStart = keyIdx + search.Length;
-        while (valStart < jsonArray.Length && jsonArray[valStart] == ' ') valStart++;
-        if (valStart >= jsonArray.Length) return null;
-
-        char opener = jsonArray[valStart];
-        if (opener == 'n') return null;      // null value
-        if (opener == '"') return null;      // already a string, JsonUtility handles it
-        if (opener != '{' && opener != '[') return null;
-
-        char closer = opener == '{' ? '}' : ']';
-        int depth = 0, end = valStart;
-        bool inStr = false;
-
-        while (end < jsonArray.Length)
-        {
-            char c = jsonArray[end];
-            if (c == '\\' && inStr) { end += 2; continue; }
-            if (c == '"') { inStr = !inStr; end++; continue; }
-            if (!inStr)
-            {
-                if (c == '{' || c == '[') depth++;
-                else if (c == '}' || c == ']') { depth--; if (depth == 0) { end++; break; } }
-            }
-            end++;
-        }
-        return jsonArray.Substring(valStart, end - valStart);
     }
 
     IEnumerator WaitForGameFlowController(float timeout = 5f)
@@ -120,7 +84,6 @@ public class SupabaseGameBridge : MonoBehaviour
             yield return null;
             elapsed += Time.unscaledDeltaTime;
         }
-
         if (GameFlowController.Instance == null)
             Debug.LogWarning("[Bridge] GameFlowController not found after " + timeout + "s — schema sync skipped.");
         else
@@ -170,73 +133,89 @@ public class SupabaseGameBridge : MonoBehaviour
     #endregion
     // ─────────────────────────────────────────────────────────────────────
     #region Experience schema sync
-    /*
-     * Pushes two things to the `experiences` table for this APK:
-     *   param_schema  — JSON array describing every tunable parameter
-     *   levels        — JSON array of the predefined level presets
-     *
-     * This runs once at startup so the dashboard always reflects the game's
-     * current configuration without any manual copy-paste.
-     *
-     * Required: GameFlowController.Instance must expose:
-     *   LevelConfig[]  levelConfigs
-     *   ParamSchema[]  paramSchema   ← NEW (see ParamSchema.cs below)
-     */
-    /*IEnumerator SyncExperienceToSupabase()
+
+    IEnumerator SyncExperienceToSupabase()
+{
+    var gfc = GameFlowController.Instance;
+    if (gfc == null)
     {
-        var gfc = GameFlowController.Instance;
-        if (gfc == null)
-        {
-            Debug.LogWarning("[Bridge] No GameFlowController — skipping experience sync.");
-            yield break;
-        }
-
-        string packageId   = Application.identifier;
-        string levelsJson  = BuildLevelsJson(gfc.levelConfigs);
-        string schemaJson  = BuildSchemaJson(gfc.paramSchema);
-
-        // Find existing row
-        string findUrl = $"{BASE_URL}/experiences?package_id=eq.{packageId}&limit=1";
-        using var findReq = Get(findUrl);
-        yield return findReq.SendWebRequest();
-
-        if (findReq.result != UnityWebRequest.Result.Success)
-        {
-            Debug.LogWarning("[Bridge] SyncExperience — GET failed: " + findReq.error);
-            yield break;
-        }
-
-        string responseBody = findReq.downloadHandler.text;
-
-        if (responseBody == "[]" || string.IsNullOrEmpty(responseBody))
-        {
-            // Create row
-            string create = $"{{" +
-                $"\"name\":\"{EscJson(Application.productName)}\"," +
-                $"\"package_id\":\"{EscJson(packageId)}\"," +
-                $"\"icon\":\"🎮\"," +
-                $"\"hand_mode\":\"single\"," +
-                $"\"finger_mode\":\"all\"," +
-                $"\"levels\":{levelsJson}," +
-                $"\"param_schema\":{schemaJson}" +
-                $"}}";
-            using var createReq = Post($"{BASE_URL}/experiences", create);
-            createReq.SetRequestHeader("Prefer", "return=minimal");
-            yield return createReq.SendWebRequest();
-            Debug.Log("[Bridge] ✅ Experience created with schema.");
-        }
-        else
-        {
-            // Patch existing row — only update levels and schema, not user-edited fields
-            string patch = $"{{\"levels\":{levelsJson},\"param_schema\":{schemaJson}}}";
-            using var patchReq = Patch($"{BASE_URL}/experiences?package_id=eq.{packageId}", patch);
-            yield return patchReq.SendWebRequest();
-            Debug.Log("[Bridge] ✅ Experience schema synced.");
-        }
+        Debug.LogWarning("[Bridge] No GameFlowController — skipping experience sync.");
+        yield break;
     }
-    
 
-    string BuildSchemaJson(ParamSchema[] schemas)
+    // ── Read ExperienceConfig (with sensible fallbacks) ────────────────
+    var expCfg = gfc.experienceConfig;
+
+    string packageId   = Application.identifier;
+    string displayName = (expCfg != null && !string.IsNullOrEmpty(expCfg.experienceName))
+                            ? expCfg.experienceName
+                            : Application.productName;
+    string icon        = expCfg != null ? expCfg.icon        : "🎮";
+    string description = expCfg != null ? expCfg.description : "";
+    string category    = expCfg != null ? expCfg.CategoryKey  : "Other";
+    string handMode    = expCfg != null ? expCfg.HandModeKey  : "single";
+    string fingerMode  = expCfg != null ? expCfg.FingerModeKey: "all";
+
+    string levelsJson  = BuildLevelsJson(gfc.levelConfigs);
+    string schemaJson  = BuildParamSchemaJson(gfc.paramSchema);
+    string kpiJson     = BuildKpiSchemaJson(gfc.kpiSchema);
+
+    Debug.Log($"[Bridge] Syncing experience: {displayName} | {category} | hand={handMode} finger={fingerMode}");
+
+    // ── Check for existing row ─────────────────────────────────────────
+    using var findReq = Get($"{BASE_URL}/experiences?package_id=eq.{packageId}&limit=1");
+    yield return findReq.SendWebRequest();
+
+    if (findReq.result != UnityWebRequest.Result.Success)
+    {
+        Debug.LogWarning("[Bridge] SyncExperience — GET failed: " + findReq.error);
+        yield break;
+    }
+
+    string responseBody = findReq.downloadHandler.text;
+
+    if (responseBody == "[]" || string.IsNullOrEmpty(responseBody))
+    {
+        // ── Create new row ─────────────────────────────────────────────
+        string create =
+            $"{{\"name\":\"{EscJson(displayName)}\"," +
+            $"\"package_id\":\"{EscJson(packageId)}\"," +
+            $"\"icon\":\"{EscJson(icon)}\"," +
+            $"\"description\":\"{EscJson(description)}\"," +
+            $"\"category\":\"{EscJson(category)}\"," +
+            $"\"hand_mode\":\"{EscJson(handMode)}\"," +
+            $"\"finger_mode\":\"{EscJson(fingerMode)}\"," +
+            $"\"levels\":{levelsJson}," +
+            $"\"param_schema\":{schemaJson}," +
+            $"\"kpi_schema\":{kpiJson}}}";
+
+        using var createReq = Post($"{BASE_URL}/experiences", create);
+        createReq.SetRequestHeader("Prefer", "return=minimal");
+        yield return createReq.SendWebRequest();
+        Debug.Log("[Bridge] ✅ Experience created with full config.");
+    }
+    else
+    {
+        // ── Patch auto-synced fields only ──────────────────────────────
+        // Never overwrite name/icon/description — clinician may have
+        // edited those in the dashboard. Only sync what Unity owns.
+        string patch =
+            $"{{\"category\":\"{EscJson(category)}\"," +
+            $"\"hand_mode\":\"{EscJson(handMode)}\"," +
+            $"\"finger_mode\":\"{EscJson(fingerMode)}\"," +
+            $"\"levels\":{levelsJson}," +
+            $"\"param_schema\":{schemaJson}," +
+            $"\"kpi_schema\":{kpiJson}}}";
+
+        using var patchReq = Patch($"{BASE_URL}/experiences?package_id=eq.{packageId}", patch);
+        yield return patchReq.SendWebRequest();
+        Debug.Log("[Bridge] ✅ Experience synced — category + hand/finger + schema.");
+    }
+}
+
+    // ── Schema serialisers ────────────────────────────────────────────────
+
+    string BuildParamSchemaJson(ParamSchema[] schemas)
     {
         if (schemas == null || schemas.Length == 0) return "[]";
         var sb = new System.Text.StringBuilder("[");
@@ -244,14 +223,11 @@ public class SupabaseGameBridge : MonoBehaviour
         {
             if (i > 0) sb.Append(",");
             var s = schemas[i];
-
-            // Normalise: Float → "range" for the dashboard
             string typeStr = s.type == ParamSchema.ParamType.Float ? "range" : s.type.ToString().ToLower();
-
             sb.Append("{");
             sb.Append($"\"key\":\"{EscJson(s.key)}\",");
             sb.Append($"\"label\":\"{EscJson(s.label)}\",");
-            sb.Append($"\"type\":\"{typeStr}\",");           // ← written ONCE here
+            sb.Append($"\"type\":\"{typeStr}\",");
             sb.Append($"\"unit\":\"{EscJson(s.unit)}\",");
             sb.Append($"\"defaultVal\":{s.defaultVal.ToString("G", System.Globalization.CultureInfo.InvariantCulture)}");
 
@@ -271,7 +247,30 @@ public class SupabaseGameBridge : MonoBehaviour
                 sb.Append($",\"max\":{s.max.ToString("G", System.Globalization.CultureInfo.InvariantCulture)}");
                 sb.Append($",\"step\":{s.step.ToString("G", System.Globalization.CultureInfo.InvariantCulture)}");
             }
+            sb.Append("}");
+        }
+        sb.Append("]");
+        return sb.ToString();
+    }
 
+    /// <summary>
+    /// Serialises the KpiSchema[] array into a JSON array that the dashboard
+    /// can read to know what metrics to display after a session.
+    /// </summary>
+    string BuildKpiSchemaJson(KpiSchema[] schemas)
+    {
+        if (schemas == null || schemas.Length == 0) return "[]";
+        var sb = new System.Text.StringBuilder("[");
+        for (int i = 0; i < schemas.Length; i++)
+        {
+            if (i > 0) sb.Append(",");
+            var k = schemas[i];
+            sb.Append("{");
+            sb.Append($"\"key\":\"{EscJson(k.key)}\",");
+            sb.Append($"\"label\":\"{EscJson(k.label)}\",");
+            sb.Append($"\"unit\":\"{EscJson(k.unit)}\",");
+            sb.Append($"\"type\":\"{k.type.ToString().ToLower()}\",");
+            sb.Append($"\"higherIsBetter\":{(k.higherIsBetter ? "true" : "false")}");
             sb.Append("}");
         }
         sb.Append("]");
@@ -288,17 +287,8 @@ public class SupabaseGameBridge : MonoBehaviour
             var cfg = configs[i];
             var exporter = cfg as ILevelConfigExporter;
             var dict = exporter != null ? exporter.ExportParams() : new Dictionary<string, object>();
-
-            sb.Append("{");
-            sb.Append($"\"level\":{cfg.level},");
-            sb.Append($"\"label\":\"{EscJson(LevelLabel(cfg.level))}\""); // ← no trailing comma
-
-            foreach (var kv in dict)
-            {
-                sb.Append(",");   // ← always prepend comma; dict entries come AFTER level+label
-                sb.Append($"\"{EscJson(kv.Key)}\":");
-                sb.Append(SerialiseValue(kv.Value));
-            }
+            sb.Append($"{{\"level\":{cfg.level},\"label\":\"{EscJson(LevelLabel(cfg.level))}\"");
+            foreach (var kv in dict) { sb.Append(","); sb.Append($"\"{EscJson(kv.Key)}\":{SerialiseValue(kv.Value)}"); }
             sb.Append("}");
         }
         sb.Append("]");
@@ -323,8 +313,6 @@ public class SupabaseGameBridge : MonoBehaviour
         }
     }
 
- 
-
     void HandleSessionState(Session s)
     {
         switch (s.status)
@@ -341,15 +329,11 @@ public class SupabaseGameBridge : MonoBehaviour
         req.timeout = 10;
         yield return req.SendWebRequest();
         if (req.result != UnityWebRequest.Result.Success) yield break;
-
         string raw = req.downloadHandler.text;
         if (raw == "[]" || string.IsNullOrEmpty(raw)) yield break;
-
         string customParamsRaw = ExtractJsonbField(raw, "custom_params");
-
         var wrap = JsonUtility.FromJson<Wrapper>("{\"items\":" + raw + "}");
         if (wrap?.items == null || wrap.items.Length == 0) yield break;
-
         wrap.items[0].custom_params = customParamsRaw;
         yield return ClaimSession(wrap.items[0]);
     }
@@ -363,17 +347,13 @@ public class SupabaseGameBridge : MonoBehaviour
                 yield return CheckForPendingSession();
             yield break;
         }
-
         using var req = Get($"{BASE_URL}/game_sessions?id=eq.{CurrentSessionId}&limit=1");
         yield return req.SendWebRequest();
         if (req.result != UnityWebRequest.Result.Success) yield break;
-
         string raw = req.downloadHandler.text;
         string customParamsRaw = ExtractJsonbField(raw, "custom_params");
-
         var wrap = JsonUtility.FromJson<Wrapper>("{\"items\":" + raw + "}");
         if (wrap?.items == null || wrap.items.Length == 0) yield break;
-
         wrap.items[0].custom_params = customParamsRaw;
         HandleSessionState(wrap.items[0]);
     }
@@ -415,26 +395,29 @@ public class SupabaseGameBridge : MonoBehaviour
         gfc.PrepareForSession();
         gfc.SetAutoMode(s.auto_mode);
 
-        // Parse custom_params JSON into a Dictionary<string, object>
         Debug.Log($"[Bridge] custom_params='{s.custom_params}' level={s.level}");
-        
         var paramDict = ParseCustomParams(s.custom_params);
         Debug.Log($"[Bridge] parsed {paramDict.Count} params");
-        // Decide: use custom config or predefined level
+
         if (paramDict.Count > 0)
         {
             int baseLevel = s.level > 0 ? s.level : 1;
             gfc.SetLevel(baseLevel);
-            gfc.ApplyCustomConfig(paramDict);  // ← generic, dict-based
+            gfc.ApplyCustomConfig(paramDict);
         }
         else
         {
             gfc.SetLevel(s.level > 0 ? s.level : 1);
         }
 
-        GameTimer.Instance?.ResetAndStart();
+        gfc.StartGameplay();
+        // ── Interaction mode (hand / finger) ──────────────────────────────
+        // hand: "left" | "right" | "both" | null → null means no selection required
+        // finger: "thumb" | "index" | … | null
+        gfc.SetInteractionMode(
+            string.IsNullOrEmpty(s.hand)   ? null : s.hand.ToLower()
+        );
 
- 
 
         HideLoading();
         Debug.Log($"[Bridge] 🎮 Started L{s.level} | {s.hand} | {s.finger} | auto={s.auto_mode} | params={s.custom_params}");
@@ -445,14 +428,14 @@ public class SupabaseGameBridge : MonoBehaviour
         _isPaused = false; IsGameInProgress = true;
         Time.timeScale = 1f;
         GameTimer.Instance?.ResumeTimer();
-        FindObjectOfType<BubbleManager>()?.ResumeSpawner();
+        FindObjectOfType<SpawnManager>()?.ResumeSpawner();
     }
 
     void PauseGame()
     {
         _isPaused = true; Time.timeScale = 0f;
         GameTimer.Instance?.PauseTimer();
-        FindObjectOfType<BubbleManager>()?.PauseSpawner();
+        FindObjectOfType<SpawnManager>()?.PauseSpawner();
     }
 
     void StopGame()
@@ -460,7 +443,7 @@ public class SupabaseGameBridge : MonoBehaviour
         Time.timeScale = 1f; _isPaused = false;
         IsGameInProgress = false; CurrentSessionId = null;
         GameTimer.Instance?.StopTimer();
-        FindObjectOfType<BubbleManager>()?.StopSpawner();
+        FindObjectOfType<SpawnManager>()?.StopSpawner();
         ShowLoading("Loading…");
         GameFlowController.Instance?.StartCoroutine(
             GameFlowController.Instance.ResetToLevelSelection());
@@ -468,7 +451,7 @@ public class SupabaseGameBridge : MonoBehaviour
 
     #endregion
     // ─────────────────────────────────────────────────────────────────────
-    #region Results
+    #region Results — with KPI data
 
     public void NotifyLevelResult(bool gameOver, Action cb = null)
         => StartCoroutine(ResultRoutine(gameOver, cb));
@@ -476,13 +459,51 @@ public class SupabaseGameBridge : MonoBehaviour
     IEnumerator ResultRoutine(bool gameOver, Action cb)
     {
         ShowLoading();
+
+        // ── Collect all KPI data from the game ────────────────────────────
+        var gfc     = GameFlowController.Instance;
+        var kpiDict = gfc?.CollectKpiData() ?? new Dictionary<string, object>();
+
         int   score    = ScoreManager.Instance.ScoreThisLevel;
         float duration = Time.realtimeSinceStartup - _sessionStart;
-        yield return Patch($"{BASE_URL}/game_sessions?id=eq.{CurrentSessionId}",
-            Json(KV("status", gameOver ? "failed" : "completed"),
-                 KV("score", score.ToString()),
-                 KV("duration_seconds", duration.ToString("F1"))));
+
+        // Build the kpi_data JSONB payload
+        string kpiJson = BuildKpiDataJson(kpiDict);
+
+        // Use a raw JSON body so kpi_data is sent as JSONB (not a JSON string)
+        string body =
+            $"{{\"status\":\"{(gameOver ? "failed" : "completed")}\"," +
+            $"\"score\":\"{score}\"," +
+            $"\"duration_seconds\":\"{duration:F1}\"," +
+            $"\"kpi_data\":{kpiJson}}}";
+
+        using var req = Patch($"{BASE_URL}/game_sessions?id=eq.{CurrentSessionId}", body);
+        yield return req.SendWebRequest();
+
+        if (req.result != UnityWebRequest.Result.Success)
+            Debug.LogWarning("[Bridge] ResultRoutine PATCH error: " + req.error);
+        else
+            Debug.Log($"[Bridge] ✅ Result sent — KPIs: {kpiJson}");
+
         cb?.Invoke();
+    }
+
+    /// <summary>
+    /// Serialises the KPI dictionary to a JSON object suitable for a JSONB column.
+    /// Values retain their native types (int, float, bool, string).
+    /// </summary>
+    string BuildKpiDataJson(Dictionary<string, object> data)
+    {
+        var sb = new System.Text.StringBuilder("{");
+        bool first = true;
+        foreach (var kv in data)
+        {
+            if (!first) sb.Append(",");
+            first = false;
+            sb.Append($"\"{EscJson(kv.Key)}\":{SerialiseValue(kv.Value)}");
+        }
+        sb.Append("}");
+        return sb.ToString();
     }
 
     public void NotifySessionEnd() => StartCoroutine(EndRoutine());
@@ -510,37 +531,22 @@ public class SupabaseGameBridge : MonoBehaviour
     // ─────────────────────────────────────────────────────────────────────
     #region Param parsing
 
-    /// <summary>
-    /// Parses the flat JSON object that the dashboard stores in custom_params.
-    /// Returns string keys → boxed float/int/bool/string values.
-    /// Simple hand-rolled parser — no external JSON library needed.
-    /// </summary>
     public static Dictionary<string, object> ParseCustomParams(string json)
     {
         var result = new Dictionary<string, object>();
         if (string.IsNullOrEmpty(json) || json == "null" || json == "{}") return result;
-
-        // Strip outer braces
         json = json.Trim();
         if (json.StartsWith("{")) json = json.Substring(1, json.Length - 2);
-
-        // Simple tokeniser — works for flat objects (no nested objects)
         int i = 0;
         while (i < json.Length)
         {
-            // Skip whitespace / commas
             while (i < json.Length && (json[i] == ',' || json[i] == ' ' || json[i] == '\n' || json[i] == '\r' || json[i] == '\t')) i++;
             if (i >= json.Length) break;
-
-            // Read key
             if (json[i] != '"') { i++; continue; }
             string key = ReadJsonString(json, ref i);
-            // Colon
             while (i < json.Length && json[i] != ':') i++;
-            i++; // skip colon
-            // Skip spaces
+            i++;
             while (i < json.Length && json[i] == ' ') i++;
-            // Read value
             object val = ReadJsonValue(json, ref i);
             if (key != null) result[key] = val;
         }
@@ -550,7 +556,7 @@ public class SupabaseGameBridge : MonoBehaviour
     static string ReadJsonString(string s, ref int i)
     {
         if (i >= s.Length || s[i] != '"') return null;
-        i++; // skip opening quote
+        i++;
         var sb = new System.Text.StringBuilder();
         while (i < s.Length && s[i] != '"')
         {
@@ -558,7 +564,7 @@ public class SupabaseGameBridge : MonoBehaviour
             else sb.Append(s[i]);
             i++;
         }
-        i++; // skip closing quote
+        i++;
         return sb.ToString();
     }
 
@@ -570,7 +576,6 @@ public class SupabaseGameBridge : MonoBehaviour
         if (c == 't') { i += 4; return true; }
         if (c == 'f') { i += 5; return false; }
         if (c == 'n') { i += 4; return null; }
-        // Number
         int start = i;
         while (i < s.Length && (char.IsDigit(s[i]) || s[i] == '-' || s[i] == '.' || s[i] == 'e' || s[i] == 'E' || s[i] == '+')) i++;
         string numStr = s.Substring(start, i - start);
@@ -578,11 +583,40 @@ public class SupabaseGameBridge : MonoBehaviour
         {
             if (float.TryParse(numStr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float fval)) return fval;
         }
-        else
-        {
-            if (int.TryParse(numStr, out int ival)) return ival;
-        }
+        else { if (int.TryParse(numStr, out int ival)) return ival; }
         return 0;
+    }
+
+    // ── JSONB field extractor ─────────────────────────────────────────────
+
+    static string ExtractJsonbField(string jsonArray, string fieldName)
+    {
+        string search = $"\"{fieldName}\":";
+        int keyIdx = jsonArray.IndexOf(search, StringComparison.Ordinal);
+        if (keyIdx < 0) return null;
+        int valStart = keyIdx + search.Length;
+        while (valStart < jsonArray.Length && jsonArray[valStart] == ' ') valStart++;
+        if (valStart >= jsonArray.Length) return null;
+        char opener = jsonArray[valStart];
+        if (opener == 'n') return null;
+        if (opener == '"') return null;
+        if (opener != '{' && opener != '[') return null;
+        char closer = opener == '{' ? '}' : ']';
+        int depth = 0, end = valStart;
+        bool inStr = false;
+        while (end < jsonArray.Length)
+        {
+            char ch = jsonArray[end];
+            if (ch == '\\' && inStr) { end += 2; continue; }
+            if (ch == '"') { inStr = !inStr; end++; continue; }
+            if (!inStr)
+            {
+                if (ch == '{' || ch == '[') depth++;
+                else if (ch == '}' || ch == ']') { depth--; if (depth == 0) { end++; break; } }
+            }
+            end++;
+        }
+        return jsonArray.Substring(valStart, end - valStart);
     }
 
     #endregion
@@ -625,6 +659,7 @@ public class SupabaseGameBridge : MonoBehaviour
         r.SetRequestHeader("Content-Type",  "application/json");
     }
 
+    // String-only Json builder (for simple payloads)
     static string Json(params (string, string)[] fields)
     {
         var s = "{";
@@ -643,9 +678,9 @@ public class SupabaseGameBridge : MonoBehaviour
     static string SerialiseValue(object v)
     {
         if (v == null) return "null";
-        if (v is bool b) return b ? "true" : "false";
-        if (v is int   i) return i.ToString();
-        if (v is float f) return f.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        if (v is bool b)   return b ? "true" : "false";
+        if (v is int   i)  return i.ToString();
+        if (v is float f)  return f.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         if (v is double d) return d.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         return $"\"{EscJson(v.ToString())}\"";
     }
@@ -684,8 +719,8 @@ public class SupabaseGameBridge : MonoBehaviour
         public string hand;
         public string finger;
         public bool   auto_mode;
-        public string custom_params;  // ← flat JSON blob, e.g. {"spawnDelay":1.25,"bombChance":10}
+        public string custom_params;   // flat JSON blob from dashboard
     }
 
     #endregion
-}*/
+}

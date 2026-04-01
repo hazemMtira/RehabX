@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1bc46bb0b5fd86a43bf314053ba602d3, type: 3}
+  m_Name: Param_GameDuration
+  m_EditorClassIdentifier: Assembly-CSharp::ParamSchema
+  key: gameDuration
+  label: Game Duration
+  unit: s
+  type: 1
+  min: 60
+  max: 350
+  step: 1
+  defaultVal: 60
+  defaultVector3: {x: 0, y: 0, z: 0}
+  minVector3: {x: -10, y: -10, z: -10}
+  maxVector3: {x: 10, y: 10, z: 10}
+  options: []

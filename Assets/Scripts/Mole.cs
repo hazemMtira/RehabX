@@ -3,64 +3,54 @@ using System.Collections;
 
 public abstract class Mole : MonoBehaviour
 {
-    protected Hole hole;
-    protected SpawnManager manager;
-    protected DifficultyData difficulty;
-    protected GameObject originalPrefab;
-    protected bool isAlive;
+    protected Hole          hole;
+    protected SpawnManager  manager;
+    protected LevelConfig   difficulty;     // FIX: was DifficultyData
+    protected GameObject    originalPrefab;
+    protected bool          isAlive;
 
     public GameObject floatingTextPrefab;
 
-   public void Init(Hole owningHole, SpawnManager spawnManager, DifficultyData diff, GameObject prefab)
-{
-    hole           = owningHole;
-    manager        = spawnManager;
-    difficulty     = diff;
-    originalPrefab = prefab;
-    isAlive        = true;
-
-    transform.position = hole.BottomPosition;
-
-    // Always face the player (camera)
-    Transform cam = Camera.main != null ? Camera.main.transform : null;
-    if (cam != null)
+    // FIX: 3rd parameter is now LevelConfig — matches SpawnManager.SpawnMole()
+    public void Init(Hole owningHole, SpawnManager spawnManager, LevelConfig config, GameObject prefab)
     {
-        Vector3 direction = cam.position - transform.position;
-        direction.y = 0f; // keep upright — only rotate on Y axis
-        if (direction != Vector3.zero)
-            transform.rotation = Quaternion.LookRotation(direction);
-    }
+        hole           = owningHole;
+        manager        = spawnManager;
+        difficulty     = config;
+        originalPrefab = prefab;
+        isAlive        = true;
 
-    StartCoroutine(LifeCycle());
-}
+        transform.position = hole.BottomPosition;
+
+        // Always face the player (camera)
+        Transform cam = Camera.main != null ? Camera.main.transform : null;
+        if (cam != null)
+        {
+            Vector3 direction = cam.position - transform.position;
+            direction.y = 0f;
+            if (direction != Vector3.zero)
+                transform.rotation = Quaternion.LookRotation(direction);
+        }
+
+        StartCoroutine(LifeCycle());
+    }
 
     IEnumerator LifeCycle()
     {
-        // Rise to top
         yield return Move(hole.BottomPosition, hole.TopPosition);
 
-        // Calculate rise time from moleSpeed — same formula as Move() coroutine:
-        // t increments by (Time.deltaTime * moleSpeed) each frame until t >= 1
-        // So riseTime ≈ 1.0 / moleSpeed
-        float riseTime = 1.0f / Mathf.Max(difficulty.moleSpeed, 0.01f);
-
-        // Small fixed buffer so sound plays just after fully risen
+        float riseTime   = 1.0f / Mathf.Max(difficulty.moleSpeed, 0.01f);
         float soundBuffer = 0.1f;
 
-        // Play notification sound
         yield return new WaitForSeconds(soundBuffer);
         if (isAlive) PlayNotificationSound();
 
-        // Wait remaining lifetime (total lifetime minus rise time minus buffer)
         float remainingLifetime = Mathf.Max(0f, difficulty.moleLifetime - riseTime - soundBuffer);
         yield return new WaitForSeconds(remainingLifetime);
 
         if (isAlive) Die();
     }
 
-    /// <summary>
-    /// Override in GoodMole / BadMole to play the correct sound.
-    /// </summary>
     protected virtual void PlayNotificationSound() { }
 
     protected virtual void Die()
@@ -128,14 +118,12 @@ public abstract class Mole : MonoBehaviour
 
         if (other.CompareTag("LeftHand"))
         {
-            Debug.Log("Hit by LEFT hand");
-            if (settings.selectedHand == HandType.Left || settings.selectedHand == HandType.Both)
+            if (settings.selectedHand == HandType.Left)
                 validHand = true;
         }
         else if (other.CompareTag("RightHand"))
         {
-            Debug.Log("Hit by RIGHT hand");
-            if (settings.selectedHand == HandType.Right || settings.selectedHand == HandType.Both)
+            if (settings.selectedHand == HandType.Right)
                 validHand = true;
         }
         else
@@ -180,7 +168,6 @@ public abstract class Mole : MonoBehaviour
         }
 
         Debug.Log("HIT SUCCESSFUL");
-        // Record max strike speed only on successful hit
         var roundController = FindObjectOfType<RoundController>();
         if (roundController != null && detector != null)
         {
@@ -191,7 +178,7 @@ public abstract class Mole : MonoBehaviour
 
         OnHit();
         Die();
-        }
+    }
 
     protected void SpawnFloatingText(string text, Color color)
     {

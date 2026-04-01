@@ -119,7 +119,7 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &287426435
+--- !u!1 &45610358
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -127,8 +127,8 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 287426437}
-  - component: {fileID: 287426436}
+  - component: {fileID: 45610360}
+  - component: {fileID: 45610361}
   m_Layer: 0
   m_Name: SupabaseManager
   m_TagString: Untagged
@@ -136,37 +136,35 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &287426436
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 287426435}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: d597b13abe4a73147b5ed8dd93943e3c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::SupabaseManager
-  pollInterval: 2
-  cancellationCheckInterval: 3
-  pauseCheckInterval: 2
-  loadingSceneName: LoadingScene
---- !u!4 &287426437
+--- !u!4 &45610360
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 287426435}
+  m_GameObject: {fileID: 45610358}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 132.53479, y: 1.83405, z: 38.73325}
+  m_LocalPosition: {x: 0.01197, y: 1.24054, z: 0.81335}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &45610361
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 45610358}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4bb14495376e8884aa828018349bf3e5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SupabaseGameBridge
+  KEY: 
+  loadingText: {fileID: 0}
 --- !u!1 &344908164
 GameObject:
   m_ObjectHideFlags: 0
@@ -813,7 +811,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1240498173
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1153,7 +1151,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1474376120}
-  - component: {fileID: 1474376119}
+  - component: {fileID: 1474376121}
   m_Layer: 0
   m_Name: GameSessionSettings
   m_TagString: Untagged
@@ -1161,25 +1159,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &1474376119
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1474376118}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: b7a04a1d6698a29458b1efa4ad96dd48, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GameSessionSettings
-  sessionId: 
-  patientName: 
-  therapistName: 
-  selectedDifficulty: {fileID: 0}
-  selectedHand: 1
-  movementDetectionEnabled: 1
-  selectedStageName: 
 --- !u!4 &1474376120
 Transform:
   m_ObjectHideFlags: 0
@@ -1195,6 +1174,30 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1474376121
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1474376118}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: effbaa02765f0a6458fe6aae8642b16a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::GameFlowController
+  experienceConfig: {fileID: 0}
+  moleSpawner: {fileID: 0}
+  scoreUI: {fileID: 0}
+  timerUI: {fileID: 0}
+  gameManager: {fileID: 0}
+  scoreText: {fileID: 0}
+  gameTimer: {fileID: 0}
+  leftHandRoot: {fileID: 0}
+  rightHandRoot: {fileID: 0}
+  levelConfigs: []
+  paramSchema: []
+  kpiSchema: []
 --- !u!1 &1560796912
 GameObject:
   m_ObjectHideFlags: 0
@@ -1522,6 +1525,6 @@ SceneRoots:
   - {fileID: 1258445106}
   - {fileID: 1785715446}
   - {fileID: 1168502789}
-  - {fileID: 287426437}
   - {fileID: 1474376120}
   - {fileID: 1240498174}
+  - {fileID: 45610360}
