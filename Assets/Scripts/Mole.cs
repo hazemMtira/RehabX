@@ -5,13 +5,12 @@ public abstract class Mole : MonoBehaviour
 {
     protected Hole          hole;
     protected SpawnManager  manager;
-    protected LevelConfig   difficulty;     // FIX: was DifficultyData
+    protected LevelConfig   difficulty;
     protected GameObject    originalPrefab;
     protected bool          isAlive;
 
     public GameObject floatingTextPrefab;
 
-    // FIX: 3rd parameter is now LevelConfig — matches SpawnManager.SpawnMole()
     public void Init(Hole owningHole, SpawnManager spawnManager, LevelConfig config, GameObject prefab)
     {
         hole           = owningHole;
@@ -39,7 +38,7 @@ public abstract class Mole : MonoBehaviour
     {
         yield return Move(hole.BottomPosition, hole.TopPosition);
 
-        float riseTime   = 1.0f / Mathf.Max(difficulty.moleSpeed, 0.01f);
+        float riseTime    = 1.0f / Mathf.Max(difficulty.moleSpeed, 0.01f);
         float soundBuffer = 0.1f;
 
         yield return new WaitForSeconds(soundBuffer);
@@ -92,6 +91,8 @@ public abstract class Mole : MonoBehaviour
 
     void OnTriggerEnter(Collider other)
     {
+            Debug.Log($"Mole triggered by: {other.name} | tag: {other.tag}");
+
         if (!other.CompareTag("LeftHand") && !other.CompareTag("RightHand"))
             return;
 
@@ -103,54 +104,30 @@ public abstract class Mole : MonoBehaviour
             return;
         }
 
-        if (GameSessionSettings.Instance == null)
-        {
-            Debug.Log("GameSessionSettings is NULL.");
-            return;
-        }
-
-        var settings = GameSessionSettings.Instance;
-
-        Debug.Log("Movement Detection Enabled: " + settings.movementDetectionEnabled);
-        Debug.Log("Selected Hand: " + settings.selectedHand);
+        // ── Hand validation via GameFlowController ─────────────────────────
+        var    gfc        = GameFlowController.Instance;
+        string activeHand = gfc?.ActiveHand; // "left" | "right" | "both" | null
 
         bool validHand = false;
 
         if (other.CompareTag("LeftHand"))
-        {
-            if (settings.selectedHand == HandType.Left)
-                validHand = true;
-        }
+            validHand = string.IsNullOrEmpty(activeHand) || activeHand == "left" || activeHand == "both";
         else if (other.CompareTag("RightHand"))
-        {
-            if (settings.selectedHand == HandType.Right)
-                validHand = true;
-        }
-        else
-        {
-            Debug.Log("Collider is NOT tagged as LeftHand or RightHand");
-        }
+            validHand = string.IsNullOrEmpty(activeHand) || activeHand == "right" || activeHand == "both";
 
         if (!validHand)
         {
-            Debug.Log("Hand not allowed by settings.");
+            Debug.Log($"Hand not allowed. Active hand: {activeHand}, triggered by: {other.tag}");
             return;
         }
 
+        // ── Gesture detection ──────────────────────────────────────────────
         var detector =
             other.GetComponent<ElbowAngleGestureDetector>() ??
             other.GetComponentInParent<ElbowAngleGestureDetector>();
 
-        if (settings.movementDetectionEnabled)
+        if (detector != null)
         {
-            Debug.Log("Movement detection REQUIRED");
-
-            if (detector == null)
-            {
-                Debug.Log("NO ElbowAngleGestureDetector found!");
-                return;
-            }
-
             Debug.Log("Gesture Ready: " + detector.gestureReady);
 
             if (!detector.gestureReady)
@@ -164,15 +141,25 @@ public abstract class Mole : MonoBehaviour
         }
         else
         {
-            Debug.Log("Movement detection NOT required.");
+            Debug.Log("No ElbowAngleGestureDetector found — hit allowed without gesture check.");
         }
 
+        // ── Record max strike speed on successful hit ──────────────────────
         Debug.Log("HIT SUCCESSFUL");
-        var roundController = FindObjectOfType<RoundController>();
-        if (roundController != null && detector != null)
+
+        if (detector != null)
         {
             float peak = detector.GetMaxWristSpeed();
-            roundController.RecordStrikeSpeed(peak);
+            Debug.Log($"[Mole] Strike speed recorded: {peak:F2} m/s");
+
+            // Record via RoundController
+            var roundController = FindFirstObjectByType<RoundController>();
+            if (roundController != null)
+                roundController.RecordStrikeSpeed(peak);
+
+            // Also push directly into GFC KPI dict as backup
+            gfc?.RecordKpi("maxStrikeSpeed", peak);
+
             detector.ResetMaxWristSpeed();
         }
 

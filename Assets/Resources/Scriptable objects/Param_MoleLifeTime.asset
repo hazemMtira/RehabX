@@ -17,7 +17,7 @@ MonoBehaviour:
   unit: 
   type: 1
   min: 1
-  max: 5
+  max: 6
   step: 1
   defaultVal: 3
   defaultVector3: {x: 0, y: 0, z: 0}

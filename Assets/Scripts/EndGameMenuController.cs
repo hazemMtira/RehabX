@@ -4,20 +4,21 @@ using UnityEngine.SceneManagement;
 public class EndGameMenuController : MonoBehaviour
 {
     /// <summary>
-    /// Returns to the loading scene so the therapist can start a new session
-    /// from the dashboard. SupabaseManager resets and polls automatically.
+    /// Resets the bridge and waits for the therapist to start
+    /// a new session from the dashboard.
     /// </summary>
     public void PlayAgain()
     {
-        if (SupabaseManager.Instance != null)
-            SupabaseManager.Instance.ResetForNewSession();
+        if (SupabaseGameBridge.Instance != null)
+        {
+            SupabaseGameBridge.Instance.ResetForNewSession();
+        }
         else
-            SceneManager.LoadScene("LoadingScene");
+        {
+            Debug.LogWarning("[EndGameMenu] No SupabaseGameBridge found.");
+        }
     }
 
-    /// <summary>
-    /// Closes the application.
-    /// </summary>
     public void QuitGame()
     {
 #if UNITY_EDITOR

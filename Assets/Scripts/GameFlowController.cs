@@ -7,14 +7,10 @@ public class GameFlowController : MonoBehaviour
 {
     public static GameFlowController Instance { get; private set; }
 
-    
-    private ElbowAngleGestureDetector gestureDetector ;
-   
+    private ElbowAngleGestureDetector gestureDetector;
 
     [Header("Experience")]
-    
     public ExperienceConfig experienceConfig;
-
 
     [Header("Gameplay objects")]
     public GameObject moleSpawner;
@@ -41,11 +37,7 @@ public class GameFlowController : MonoBehaviour
 
     // ── Runtime state ─────────────────────────────────────────────────────
 
-    /// <summary>"left" | "right" | "both" | null</summary>
-    public string ActiveHand   { get; private set; }
-
-    
-
+    public string      ActiveHand    { get; private set; }
     public int         Level         { get; private set; }
     public bool        AutoMode      { get; private set; }
     public LevelConfig CurrentConfig { get; private set; }
@@ -56,15 +48,17 @@ public class GameFlowController : MonoBehaviour
     private bool _levelPassed;
 
     // ── Cached references ─────────────────────────────────────────────────
+
     private SpawnManager _spawner;
-    private SpawnManager Spawner => _spawner != null ? _spawner : (_spawner = FindObjectOfType<SpawnManager>());
+    private SpawnManager Spawner =>
+        _spawner != null ? _spawner : (_spawner = FindFirstObjectByType<SpawnManager>());
 
     // ─────────────────────────────────────────────────────────────────────
+
     void Awake()
     {
         if (Instance == null) Instance = this;
         else { Destroy(gameObject); return; }
-        
     }
 
     void Start()
@@ -72,6 +66,49 @@ public class GameFlowController : MonoBehaviour
         ScoreManager.Instance.OnScoreChanged += HandleScoreChanged;
         UpdateScoreDisplay(0, 0);
     }
+
+    void OnDestroy()
+    {
+        if (ScoreManager.Instance != null)
+            ScoreManager.Instance.OnScoreChanged -= HandleScoreChanged;
+    }
+
+    // ── Session lifecycle ─────────────────────────────────────────────────
+
+    public void PrepareForSession()
+    {
+        Debug.Log($"[GFC] PrepareForSession — frame={Time.frameCount} time={Time.time:F2}s");
+
+        _kpiData.Clear();
+        _usingRuntimeConfig = false;
+
+        if (moleSpawner) moleSpawner.SetActive(true);
+        if (scoreUI)     scoreUI.SetActive(true);
+        if (timerUI)     timerUI.SetActive(true);
+        if (gameManager) gameManager.SetActive(true);
+
+        if (leftHandRoot)  leftHandRoot.SetActive(false);
+        if (rightHandRoot) rightHandRoot.SetActive(false);
+
+        if (gestureDetector != null) gestureDetector.ResetMaxWristSpeed();
+    }
+
+    public void SetAutoMode(bool enabled) { AutoMode = enabled; }
+
+    public void SetLevel(int newLevel)
+    {
+        Level        = Mathf.Clamp(newLevel, 1, levelConfigs?.Length ?? 1);
+        _levelPassed = false;
+        CurrentConfig = GetConfig(Level);
+        _usingRuntimeConfig = false;
+
+        if (!AutoMode) ScoreManager.Instance.ResetAll();
+        else           ScoreManager.Instance.ResetLevelScore();
+
+        if (Spawner != null)
+            Spawner.currentConfig = CurrentConfig;
+    }
+
     public void StartGameplay()
     {
         if (Spawner == null)
@@ -86,85 +123,46 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        Debug.Log("🚀 Starting gameplay...");
+        // Push required score to the in-game UI
+        var ui = FindFirstObjectByType<GameUIBuilder>();
+        if (ui != null) ui.SetTargetScore(CurrentConfig.requiredScore);
 
         Spawner.currentConfig = CurrentConfig;
         Spawner.StartSpawner();
-
         GameTimer.Instance?.ResetAndStart();
-    }
-    void OnDestroy()
-    {
-        if (ScoreManager.Instance != null)
-            ScoreManager.Instance.OnScoreChanged -= HandleScoreChanged;
-    }
 
-    // ── Session lifecycle ─────────────────────────────────────────────────
-
-    public void PrepareForSession()
-    {
-        _kpiData.Clear();
-        _usingRuntimeConfig = false;
-
-        if (moleSpawner) moleSpawner.SetActive(true);
-        if (scoreUI)      scoreUI.SetActive(true);
-        if (timerUI)      timerUI.SetActive(true);
-        if (gameManager)  gameManager.SetActive(true);
-
-        if (leftHandRoot)  leftHandRoot.SetActive(false);
-        if (rightHandRoot) rightHandRoot.SetActive(false);
-        if (gestureDetector != null) gestureDetector.ResetMaxWristSpeed();
-        // MolePoolManager is a lazy pool — no HardStart needed.
-        // Moles are instantiated on demand the first time GetMole() is called.
-    }
-
-    public void SetAutoMode(bool enabled) { AutoMode = enabled; }
-
-    public void SetLevel(int newLevel)
-    {
-        Level         = Mathf.Clamp(newLevel, 1, levelConfigs?.Length ?? 1);
-        _levelPassed  = false;
-        CurrentConfig = GetConfig(Level);
-        _usingRuntimeConfig = false;
-
-        if (!AutoMode) ScoreManager.Instance.ResetAll();
-        else           ScoreManager.Instance.ResetLevelScore();
-
-        if (Spawner != null)
-            Spawner.currentConfig = CurrentConfig;
+        Debug.Log("🚀 Gameplay started.");
     }
 
     // ── Interaction mode ──────────────────────────────────────────────────
 
-        public void SetInteractionMode(string hand)
+    public void SetInteractionMode(string hand)
     {
+        Debug.Log($"[GFC] SetInteractionMode — hand={hand} frame={Time.frameCount} time={Time.time:F2}s");
         ActiveHand = hand;
         ApplyHandRoots(hand);
-
-        Debug.Log($"[GFC] Interaction — hand={hand}");
     }
 
-private void ApplyHandRoots(string hand)
-{
-    if (leftHandRoot)  leftHandRoot.SetActive(hand == "left");
-    if (rightHandRoot) rightHandRoot.SetActive(hand == "right");
-
-    // Assign ONLY one detector
-    if (hand == "left" && leftHandRoot != null)
+    private void ApplyHandRoots(string hand)
     {
-        gestureDetector = leftHandRoot.GetComponentInChildren<ElbowAngleGestureDetector>(true);
-    }
-    else if (hand == "right" && rightHandRoot != null)
-    {
-        gestureDetector = rightHandRoot.GetComponentInChildren<ElbowAngleGestureDetector>(true);
-    }
-    else
-    {
-        gestureDetector = null;
-    }
+        if (leftHandRoot)  leftHandRoot.SetActive(hand == "left");
+        if (rightHandRoot) rightHandRoot.SetActive(hand == "right");
 
-    Debug.Log("GestureDetector = " + gestureDetector);
-}
+        if (hand == "left" && leftHandRoot != null)
+            gestureDetector = leftHandRoot.GetComponentInChildren<ElbowAngleGestureDetector>(true);
+        else if (hand == "right" && rightHandRoot != null)
+            gestureDetector = rightHandRoot.GetComponentInChildren<ElbowAngleGestureDetector>(true);
+        else
+            gestureDetector = null;
+
+        if (gestureDetector != null)
+        {
+            gestureDetector.ForceReinitialize();
+            Debug.Log($"[GFC] Detector reinitialized: {gestureDetector.name}");
+        }
+
+        Debug.Log("GestureDetector = " + gestureDetector);
+    }
 
     // ── KPI recording ─────────────────────────────────────────────────────
 
@@ -174,28 +172,21 @@ private void ApplyHandRoots(string hand)
         Debug.Log($"[GFC] KPI recorded: {key} = {value}");
     }
 
-   public Dictionary<string, object> CollectKpiData()
-{
-    if (HasKpi("score") && !_kpiData.ContainsKey("score"))
-        _kpiData["score"] = ScoreManager.Instance.ScoreThisLevel;
+    public Dictionary<string, object> CollectKpiData()
+    {
+        if (HasKpi("score") && !_kpiData.ContainsKey("score"))
+            _kpiData["score"] = ScoreManager.Instance.ScoreThisLevel;
 
-    if (HasKpi("duration") && !_kpiData.ContainsKey("duration"))
-        _kpiData["duration"] = Mathf.RoundToInt(GameTimer.Instance?.ElapsedSeconds ?? 0);
+        if (HasKpi("duration") && !_kpiData.ContainsKey("duration"))
+            _kpiData["duration"] = Mathf.RoundToInt(GameTimer.Instance?.ElapsedSeconds ?? 0);
 
-    // ── Debug every condition individually ────────────────────────────
-    Debug.Log($"[KPI] HasKpi('maxStrikeSpeed')       = {HasKpi("maxStrikeSpeed")}");
-    Debug.Log($"[KPI] already in _kpiData            = {_kpiData.ContainsKey("maxStrikeSpeed")}");
-    Debug.Log($"[KPI] gestureDetector != null         = {gestureDetector != null}");
-    if (gestureDetector != null)
-        Debug.Log($"[KPI] GetMaxWristSpeed()             = {gestureDetector.GetMaxWristSpeed()}");
+        if (HasKpi("maxStrikeSpeed") && !_kpiData.ContainsKey("maxStrikeSpeed") && gestureDetector != null)
+            _kpiData["maxStrikeSpeed"] = gestureDetector.GetMaxWristSpeed();
 
-    if (HasKpi("maxStrikeSpeed") && !_kpiData.ContainsKey("maxStrikeSpeed") && gestureDetector != null)
-        _kpiData["maxStrikeSpeed"] = gestureDetector.GetMaxWristSpeed();
+        Debug.Log($"[KPI] Final keys: {string.Join(", ", _kpiData.Keys)}");
 
-    Debug.Log($"[KPI] Final _kpiData keys: {string.Join(", ", _kpiData.Keys)}");
-
-    return new Dictionary<string, object>(_kpiData);
-}
+        return new Dictionary<string, object>(_kpiData);
+    }
 
     private bool HasKpi(string key)
     {
@@ -217,16 +208,17 @@ private void ApplyHandRoots(string hand)
         cfg.moleLifetime   = GetFloat(p, "moleLifetime",   CurrentConfig?.moleLifetime   ?? 8f);
         cfg.moleSpeed      = GetFloat(p, "moleSpeed",      CurrentConfig?.moleSpeed      ?? 2.5f);
         cfg.maxActiveMoles = GetInt  (p, "maxActiveMoles", CurrentConfig?.maxActiveMoles ?? 3);
-        cfg.levelPosition  = GetVector3(p, "levelPosition",  CurrentConfig?.levelPosition  ?? Vector3.zero);
+        cfg.levelPosition  = GetVector3(p, "levelPosition", CurrentConfig?.levelPosition ?? Vector3.zero);
+
         CurrentConfig       = cfg;
         _usingRuntimeConfig = true;
 
         if (Spawner != null) Spawner.currentConfig = CurrentConfig;
 
-        Debug.Log($"[GFC] ✅ Custom config applied: " +
-                  $"requiredScore={cfg.requiredScore} gameDuration={cfg.gameDuration} " +
-                  $"spawnInterval={cfg.spawnInterval} moleLifetime={cfg.moleLifetime} " +
-                  $"moleSpeed={cfg.moleSpeed} maxActiveMoles={cfg.maxActiveMoles} levelPosition={cfg.levelPosition}");
+        Debug.Log($"[GFC] Custom config applied: requiredScore={cfg.requiredScore} " +
+                  $"gameDuration={cfg.gameDuration} spawnInterval={cfg.spawnInterval} " +
+                  $"moleLifetime={cfg.moleLifetime} moleSpeed={cfg.moleSpeed} " +
+                  $"maxActiveMoles={cfg.maxActiveMoles}");
     }
 
     // ── Param helpers ─────────────────────────────────────────────────────
@@ -245,39 +237,31 @@ private void ApplyHandRoots(string hand)
     static int GetInt(Dictionary<string, object> d, string key, int fallback)
         => (int)GetFloat(d, key, fallback);
 
-    static bool GetBool(Dictionary<string, object> d, string key, bool fallback)
+    static Vector3 GetVector3(Dictionary<string, object> d, string key, Vector3 fallback)
     {
         if (!d.TryGetValue(key, out var v) || v == null) return fallback;
-        if (v is bool b) return b;
-        return v.ToString() == "1" || v.ToString().ToLower() == "true";
-    }
-   static Vector3 GetVector3(Dictionary<string, object> d, string key, Vector3 fallback)
-{
-    if (!d.TryGetValue(key, out var v) || v == null) return fallback;
+        if (v is Vector3 vec) return vec;
 
-    if (v is Vector3 vec) return vec;
+        if (v is Dictionary<string, object> dict)
+        {
+            float x = dict.ContainsKey("x") ? float.Parse(dict["x"].ToString()) : 0;
+            float y = dict.ContainsKey("y") ? float.Parse(dict["y"].ToString()) : 0;
+            float z = dict.ContainsKey("z") ? float.Parse(dict["z"].ToString()) : 0;
+            return new Vector3(x, y, z);
+        }
 
-    // If coming from JSON or dashboard (likely Dictionary or array)
-    if (v is Dictionary<string, object> dict)
-    {
-        float x = dict.ContainsKey("x") ? float.Parse(dict["x"].ToString()) : 0;
-        float y = dict.ContainsKey("y") ? float.Parse(dict["y"].ToString()) : 0;
-        float z = dict.ContainsKey("z") ? float.Parse(dict["z"].ToString()) : 0;
-        return new Vector3(x, y, z);
-    }
+        var parts = v.ToString().Split(',');
+        if (parts.Length == 3)
+        {
+            float.TryParse(parts[0], out float x);
+            float.TryParse(parts[1], out float y);
+            float.TryParse(parts[2], out float z);
+            return new Vector3(x, y, z);
+        }
 
-    // If it's a string like "1,2,3"
-    var parts = v.ToString().Split(',');
-    if (parts.Length == 3)
-    {
-        float.TryParse(parts[0], out float x);
-        float.TryParse(parts[1], out float y);
-        float.TryParse(parts[2], out float z);
-        return new Vector3(x, y, z);
+        return fallback;
     }
 
-    return fallback;
-}
     // ── Score ─────────────────────────────────────────────────────────────
 
     void HandleScoreChanged(int total, int thisLevel)
@@ -305,10 +289,9 @@ private void ApplyHandRoots(string hand)
 
         _kpiData["score"]    = ScoreManager.Instance.ScoreThisLevel;
         _kpiData["duration"] = Mathf.RoundToInt(GameTimer.Instance?.ElapsedSeconds ?? 0);
+
         if (HasKpi("maxStrikeSpeed") && gestureDetector != null)
-        {
             _kpiData["maxStrikeSpeed"] = gestureDetector.GetMaxWristSpeed();
-        }
 
         if (AutoMode && Level < (levelConfigs?.Length ?? 1) && !_usingRuntimeConfig)
         {
@@ -331,10 +314,10 @@ private void ApplyHandRoots(string hand)
 
         _kpiData["score"]    = ScoreManager.Instance.ScoreThisLevel;
         _kpiData["duration"] = Mathf.RoundToInt(GameTimer.Instance?.ElapsedSeconds ?? 0);
+
         if (HasKpi("maxStrikeSpeed") && gestureDetector != null)
-        {
             _kpiData["maxStrikeSpeed"] = gestureDetector.GetMaxWristSpeed();
-        }
+
         SupabaseGameBridge.Instance?.NotifyLevelResult(true,
             () => SupabaseGameBridge.Instance?.NotifySessionEnd());
 
@@ -356,9 +339,9 @@ private void ApplyHandRoots(string hand)
         SupabaseGameBridge.Instance?.NotifyLevelAdvance(Level);
 
         if (moleSpawner) moleSpawner.SetActive(true);
-        if (scoreUI)      scoreUI.SetActive(true);
-        if (timerUI)      timerUI.SetActive(true);
-        if (gameManager)  gameManager.SetActive(true);
+        if (scoreUI)     scoreUI.SetActive(true);
+        if (timerUI)     timerUI.SetActive(true);
+        if (gameManager) gameManager.SetActive(true);
 
         if (Spawner != null) StartCoroutine(DelayBeforeStart(Spawner, 0.75f));
     }
@@ -382,9 +365,9 @@ private void ApplyHandRoots(string hand)
         Spawner?.StopSpawner();
 
         if (moleSpawner) moleSpawner.SetActive(false);
-        if (scoreUI)      scoreUI.SetActive(false);
-        if (timerUI)      timerUI.SetActive(false);
-        if (gameManager)  gameManager.SetActive(false);
+        if (scoreUI)     scoreUI.SetActive(false);
+        if (timerUI)     timerUI.SetActive(false);
+        if (gameManager) gameManager.SetActive(false);
 
         if (leftHandRoot)  leftHandRoot.SetActive(true);
         if (rightHandRoot) rightHandRoot.SetActive(true);
@@ -405,7 +388,7 @@ private void ApplyHandRoots(string hand)
         ActiveHand    = null;
         IsResetting   = false;
 
-        Debug.Log("[GFC] ✅ Reset complete.");
+        Debug.Log("[GFC] Reset complete.");
     }
 
     LevelConfig GetConfig(int level)

@@ -428,14 +428,14 @@ public class SupabaseGameBridge : MonoBehaviour
         _isPaused = false; IsGameInProgress = true;
         Time.timeScale = 1f;
         GameTimer.Instance?.ResumeTimer();
-        FindObjectOfType<SpawnManager>()?.ResumeSpawner();
+        FindFirstObjectByType<SpawnManager>()?.ResumeSpawner();
     }
 
     void PauseGame()
     {
         _isPaused = true; Time.timeScale = 0f;
         GameTimer.Instance?.PauseTimer();
-        FindObjectOfType<SpawnManager>()?.PauseSpawner();
+        FindFirstObjectByType<SpawnManager>()?.PauseSpawner();
     }
 
     void StopGame()
@@ -443,12 +443,25 @@ public class SupabaseGameBridge : MonoBehaviour
         Time.timeScale = 1f; _isPaused = false;
         IsGameInProgress = false; CurrentSessionId = null;
         GameTimer.Instance?.StopTimer();
-        FindObjectOfType<SpawnManager>()?.StopSpawner();
+        FindFirstObjectByType<SpawnManager>()?.StopSpawner();
         ShowLoading("Loading…");
         GameFlowController.Instance?.StartCoroutine(
             GameFlowController.Instance.ResetToLevelSelection());
     }
 
+        /// <summary>
+        /// Called by EndGameMenuController when the patient wants to play again.
+        /// Clears the current session so the bridge starts polling for a new one.
+        /// </summary>
+        public void ResetForNewSession()
+        {
+            IsGameInProgress = false;
+            CurrentSessionId = null;
+            _isPaused        = false;
+            _stopHandled     = false;
+
+            Debug.Log("[Bridge] ResetForNewSession — polling for next session.");
+        }
     #endregion
     // ─────────────────────────────────────────────────────────────────────
     #region Results — with KPI data
